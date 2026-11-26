@@ -1,0 +1,1666 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Pillar 0: Global Default-Deny Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // GLOBAL HARDENED PRIMITIVES
+    // =========================================================================
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidString(val, minLen, maxLen) {
+      return val is string && val.size() >= minLen && val.size() <= maxLen;
+    }
+
+    function isValidCountry(code) {
+      return code in ['EG', 'AE', 'QA', 'OM', 'GB'];
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isBootstrappedAdmin() {
+      return isSignedIn() && request.auth.token.email == 'hamzaelhelaly08@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.adminLevel == 'central_super_admin' &&
+        (!('active' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data) ||
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true)
+      );
+    }
+
+    function isFinanceAdmin() {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.adminLevel == 'finance_admin' &&
+        (!('active' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data) ||
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true);
+    }
+
+    function isTenantOwnerOrMember(tenantId) {
+      return isSignedIn() && (
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid ||
+        exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid))
+      );
+    }
+
+    function isActiveTenantMember(tenantId) {
+      return isSignedIn() && (
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid || (
+          exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid)).data.active == true
+        )
+      );
+    }
+
+    // =========================================================================
+    // ENTITY VALIDATION BLUEPRINTS (Anti-Update-Gap — No resource/diff inside)
+    // =========================================================================
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'adminLevel', 'label', 'grantedBy', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'adminLevel', 'label', 'grantedBy', 'active', 'createdAt'])
+        && isValidId(data.uid)
+        && data.adminLevel in ['central_super_admin', 'finance_admin']
+        && isValidString(data.label, 2, 100)
+        && isValidId(data.grantedBy)
+        && (!('active' in data) || data.active is bool)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'status', 'countryCode', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'role', 'tenantId', 'status', 'countryCode', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && isValidString(data.displayName, 2, 120)
+        && data.role in ['visitor', 'customer', 'employee', 'entity_admin', 'merchant_owner', 'merchant_staff', 'kitchen_partner', 'entertainment_partner', 'delivery_client', 'courier', 'opportunity_partner', 'finance_admin', 'central_admin', 'central_super_admin']
+        && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
+        && data.status in ['active', 'pending', 'suspended']
+        && isValidCountry(data.countryCode)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserPrivateProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'phone', 'nationalOrTaxId', 'address', 'updatedAt'])
+        && isValidId(data.uid)
+        && isValidString(data.email, 3, 160)
+        && (!('phone' in data) || isValidString(data.phone, 0, 32))
+        && (!('nationalOrTaxId' in data) || isValidString(data.nationalOrTaxId, 0, 64))
+        && (!('address' in data) || isValidString(data.address, 0, 240))
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOnboardingApplication(data) {
+      return data.keys().hasAll(['appId', 'applicantUid', 'targetRole', 'entityType', 'businessName', 'contactName', 'phone', 'countryCode', 'city', 'commercialRegRef', 'selectedPlanId', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['appId', 'applicantUid', 'targetRole', 'entityType', 'businessName', 'contactName', 'phone', 'countryCode', 'city', 'commercialRegRef', 'selectedPlanId', 'notes', 'status', 'adminComment', 'reviewedByUid', 'createdTenantId', 'createdAt', 'updatedAt'])
+        && isValidId(data.appId)
+        && isValidId(data.applicantUid)
+        && data.targetRole in ['merchant_owner', 'delivery_client', 'courier', 'opportunity_partner']
+        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'courier_individual', 'project_owner', 'site_owner']
+        && isValidString(data.businessName, 2, 140)
+        && isValidString(data.contactName, 2, 120)
+        && isValidString(data.phone, 6, 32)
+        && isValidCountry(data.countryCode)
+        && isValidString(data.city, 2, 80)
+        && isValidString(data.commercialRegRef, 2, 80)
+        && isValidId(data.selectedPlanId)
+        && (!('notes' in data) || isValidString(data.notes, 0, 600))
+        && data.status in ['pending_review', 'needs_info', 'approved', 'rejected']
+        && (!('adminComment' in data) || isValidString(data.adminComment, 0, 400))
+        && (!('reviewedByUid' in data) || (data.reviewedByUid is string && data.reviewedByUid.size() <= 128))
+        && (!('createdTenantId' in data) || (data.createdTenantId is string && data.createdTenantId.size() <= 128))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTenantWorkspace(data) {
+      return data.keys().hasAll(['tenantId', 'ownerUid', 'name', 'entityType', 'countryCode', 'city', 'commercialRegRef', 'planId', 'customCommissionPct', 'deliveryEnabled', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'ownerUid', 'name', 'entityType', 'countryCode', 'city', 'commercialRegRef', 'planId', 'customCommissionPct', 'deliveryEnabled', 'status', 'contractStatus', 'contractedKitchenIdsCsv', 'logoUrl', 'cateringScheduleText', 'createdAt', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && isValidId(data.ownerUid)
+        && isValidString(data.name, 2, 140)
+        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'delivery_client']
+        && isValidCountry(data.countryCode)
+        && isValidString(data.city, 2, 80)
+        && isValidString(data.commercialRegRef, 2, 80)
+        && isValidId(data.planId)
+        && data.customCommissionPct is number && data.customCommissionPct >= 0 && data.customCommissionPct <= 60
+        && data.deliveryEnabled is bool
+        && data.status in ['active', 'suspended']
+        && (!('contractStatus' in data) || data.contractStatus in ['contracted', 'in_contracting', 'prospective', 'unlaunched_sector'])
+        && (!('contractedKitchenIdsCsv' in data) || isValidString(data.contractedKitchenIdsCsv, 0, 1000))
+        && (!('logoUrl' in data) || isValidString(data.logoUrl, 0, 500))
+        && (!('cateringScheduleText' in data) || isValidString(data.cateringScheduleText, 0, 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTenantMember(data) {
+      return data.keys().hasAll(['uid', 'tenantId', 'staffName', 'memberRole', 'active', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'tenantId', 'staffName', 'memberEmail', 'memberRole', 'canonicalRole', 'permissions', 'inviteStatus', 'invitedByUid', 'active', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && isValidId(data.tenantId)
+        && isValidString(data.staffName, 2, 100)
+        && (!('memberEmail' in data) || isValidString(data.memberEmail, 3, 160))
+        && data.memberRole in ['owner', 'manager', 'staff']
+        && (!('canonicalRole' in data) || isValidString(data.canonicalRole, 2, 64))
+        && (!('permissions' in data) || data.permissions is list)
+        && (!('inviteStatus' in data) || data.inviteStatus in ['pending', 'active', 'suspended'])
+        && (!('invitedByUid' in data) || isValidString(data.invitedByUid, 1, 128))
+        && data.active is bool
+        && data.createdAt is timestamp
+        && (!('updatedAt' in data) || data.updatedAt is timestamp);
+    }
+
+    function isValidPublicStorefront(data) {
+      return data.keys().hasAll(['tenantId', 'name', 'entityType', 'countryCode', 'city', 'isActive', 'updatedAt'])
+        && data.keys().hasOnly(['tenantId', 'name', 'entityType', 'countryCode', 'city', 'isActive', 'updatedAt'])
+        && isValidId(data.tenantId)
+        && isValidString(data.name, 2, 140)
+        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'delivery_client']
+        && isValidCountry(data.countryCode)
+        && isValidString(data.city, 2, 80)
+        && data.isActive is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCatalogItem(data) {
+      return data.keys().hasAll(['itemId', 'tenantId', 'merchantOwnerUid', 'storeName', 'title', 'category', 'priceEGP', 'stockQty', 'isAvailable', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['itemId', 'tenantId', 'merchantOwnerUid', 'storeName', 'title', 'category', 'priceEGP', 'stockQty', 'isAvailable', 'createdAt', 'updatedAt'])
+        && isValidId(data.itemId)
+        && isValidId(data.tenantId)
+        && isValidId(data.merchantOwnerUid)
+        && isValidString(data.storeName, 2, 140)
+        && isValidString(data.title, 2, 140)
+        && isValidString(data.category, 2, 64)
+        && data.priceEGP is number && data.priceEGP >= 1 && data.priceEGP <= 1000000
+        && data.stockQty is number && data.stockQty >= 0 && data.stockQty <= 1000000
+        && data.isAvailable is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCommercialOrder(data) {
+      return data.keys().hasAll(['orderId', 'tenantId', 'merchantOwnerUid', 'customerUid', 'customerName', 'itemsSummary', 'subtotalEGP', 'platformCommissionEGP', 'deliveryFeeEGP', 'netMerchantEGP', 'needsDelivery', 'dropoffAddress', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['orderId', 'tenantId', 'merchantOwnerUid', 'customerUid', 'customerName', 'itemsSummary', 'subtotalEGP', 'platformCommissionEGP', 'deliveryFeeEGP', 'netMerchantEGP', 'needsDelivery', 'dropoffAddress', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.orderId)
+        && isValidId(data.tenantId)
+        && isValidId(data.merchantOwnerUid)
+        && isValidId(data.customerUid)
+        && isValidString(data.customerName, 2, 100)
+        && isValidString(data.itemsSummary, 2, 500)
+        && data.subtotalEGP is number && data.subtotalEGP >= 0 && data.subtotalEGP <= 10000000
+        && data.platformCommissionEGP is number && data.platformCommissionEGP >= 0 && data.platformCommissionEGP <= 10000000
+        && data.deliveryFeeEGP is number && data.deliveryFeeEGP >= 0 && data.deliveryFeeEGP <= 1000000
+        && data.netMerchantEGP is number && data.netMerchantEGP >= 0 && data.netMerchantEGP <= 10000000
+        && data.needsDelivery is bool
+        && isValidString(data.dropoffAddress, 3, 240)
+        && data.status in ['pending_merchant', 'accepted_preparing', 'ready_for_pickup', 'in_delivery', 'completed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCourierProfile(data) {
+      return data.keys().hasAll(['courierUid', 'fullName', 'vehicleType', 'zone', 'isOnline', 'isApproved', 'walletBalanceEGP', 'completedDeliveries', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['courierUid', 'fullName', 'vehicleType', 'zone', 'isOnline', 'isApproved', 'walletBalanceEGP', 'completedDeliveries', 'createdAt', 'updatedAt'])
+        && isValidId(data.courierUid)
+        && isValidString(data.fullName, 2, 120)
+        && data.vehicleType in ['motorcycle', 'car', 'chilled_van', 'truck']
+        && isValidString(data.zone, 2, 100)
+        && data.isOnline is bool
+        && data.isApproved is bool
+        && data.walletBalanceEGP is number && data.walletBalanceEGP >= 0 && data.walletBalanceEGP <= 10000000
+        && data.completedDeliveries is number && data.completedDeliveries >= 0 && data.completedDeliveries <= 1000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeliveryRequest(data) {
+      return data.keys().hasAll(['deliveryId', 'requesterUid', 'tenantId', 'pickupLocation', 'dropoffLocation', 'deliveryFeeEGP', 'courierShareEGP', 'platformDeliveryFeeEGP', 'assignedCourierUid', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['deliveryId', 'requesterUid', 'tenantId', 'orderId', 'pickupLocation', 'dropoffLocation', 'packageNote', 'deliveryFeeEGP', 'courierShareEGP', 'platformDeliveryFeeEGP', 'assignedCourierUid', 'podConfirmationNote', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.deliveryId)
+        && isValidId(data.requesterUid)
+        && isValidId(data.tenantId)
+        && (!('orderId' in data) || isValidString(data.orderId, 0, 128))
+        && isValidString(data.pickupLocation, 3, 240)
+        && isValidString(data.dropoffLocation, 3, 240)
+        && (!('packageNote' in data) || isValidString(data.packageNote, 0, 300))
+        && data.deliveryFeeEGP is number && data.deliveryFeeEGP >= 0 && data.deliveryFeeEGP <= 1000000
+        && data.courierShareEGP is number && data.courierShareEGP >= 0 && data.courierShareEGP <= 1000000
+        && data.platformDeliveryFeeEGP is number && data.platformDeliveryFeeEGP >= 0 && data.platformDeliveryFeeEGP <= 1000000
+        && isValidString(data.assignedCourierUid, 0, 128)
+        && (!('podConfirmationNote' in data) || isValidString(data.podConfirmationNote, 0, 200))
+        && data.status in ['requested', 'assigned', 'picked_up', 'in_transit', 'delivered', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFaydOpportunity(data) {
+      return data.keys().hasAll(['oppId', 'ownerUid', 'ownerName', 'oppKind', 'title', 'category', 'city', 'description', 'commercialTerms', 'costOrInvestmentEGP', 'freeResourceBlocked', 'approvalStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['oppId', 'ownerUid', 'ownerName', 'oppKind', 'title', 'category', 'city', 'description', 'commercialTerms', 'costOrInvestmentEGP', 'freeResourceBlocked', 'approvalStatus', 'createdAt', 'updatedAt'])
+        && isValidId(data.oppId)
+        && isValidId(data.ownerUid)
+        && isValidString(data.ownerName, 2, 120)
+        && data.oppKind in ['project_expertise', 'commercial_site']
+        && isValidString(data.title, 4, 160)
+        && isValidString(data.category, 2, 80)
+        && isValidString(data.city, 2, 80)
+        && isValidString(data.description, 10, 800)
+        && isValidString(data.commercialTerms, 10, 500)
+        && data.costOrInvestmentEGP is number && data.costOrInvestmentEGP > 0 && data.costOrInvestmentEGP <= 100000000
+        && data.freeResourceBlocked == true
+        && data.approvalStatus in ['pending_admin', 'approved', 'rejected', 'closed']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUsufructProposal(data) {
+      return data.keys().hasAll(['proposalId', 'opportunityId', 'opportunityOwnerUid', 'proposerUid', 'proposerName', 'proposerProfitPct', 'siteOwnerProfitPct', 'platformUsufructPct', 'termsSummary', 'proposerAgreed', 'siteOwnerAgreed', 'adminApproved', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['proposalId', 'opportunityId', 'opportunityOwnerUid', 'proposerUid', 'proposerName', 'proposerProfitPct', 'siteOwnerProfitPct', 'platformUsufructPct', 'termsSummary', 'proposerAgreed', 'siteOwnerAgreed', 'adminApproved', 'contractId', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.proposalId)
+        && isValidId(data.opportunityId)
+        && isValidId(data.opportunityOwnerUid)
+        && isValidId(data.proposerUid)
+        && isValidString(data.proposerName, 2, 120)
+        && data.proposerProfitPct is number && data.proposerProfitPct > 0 && data.proposerProfitPct <= 95
+        && data.siteOwnerProfitPct is number && data.siteOwnerProfitPct > 0 && data.siteOwnerProfitPct <= 95
+        && data.platformUsufructPct is number && data.platformUsufructPct >= 1 && data.platformUsufructPct <= 50
+        && (data.proposerProfitPct + data.siteOwnerProfitPct + data.platformUsufructPct) == 100
+        && isValidString(data.termsSummary, 10, 600)
+        && data.proposerAgreed is bool
+        && data.siteOwnerAgreed is bool
+        && data.adminApproved is bool
+        && (!('contractId' in data) || isValidString(data.contractId, 0, 128))
+        && data.status in ['awaiting_site_owner', 'awaiting_admin', 'contract_issued', 'rejected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUsufructContract(data) {
+      return data.keys().hasAll(['contractId', 'proposalId', 'opportunityId', 'opportunityOwnerUid', 'proposerUid', 'proposerProfitPct', 'siteOwnerProfitPct', 'platformUsufructPct', 'commercialTerms', 'approvedByAdminUid', 'contractStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['contractId', 'proposalId', 'opportunityId', 'opportunityOwnerUid', 'proposerUid', 'proposerProfitPct', 'siteOwnerProfitPct', 'platformUsufructPct', 'commercialTerms', 'approvedByAdminUid', 'contractStatus', 'createdAt', 'updatedAt'])
+        && isValidId(data.contractId)
+        && isValidId(data.proposalId)
+        && isValidId(data.opportunityId)
+        && isValidId(data.opportunityOwnerUid)
+        && isValidId(data.proposerUid)
+        && data.proposerProfitPct is number && data.proposerProfitPct > 0
+        && data.siteOwnerProfitPct is number && data.siteOwnerProfitPct > 0
+        && data.platformUsufructPct is number && data.platformUsufructPct >= 1
+        && (data.proposerProfitPct + data.siteOwnerProfitPct + data.platformUsufructPct) == 100
+        && isValidString(data.commercialTerms, 10, 600)
+        && isValidId(data.approvedByAdminUid)
+        && data.contractStatus in ['active', 'completed', 'terminated']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSubscriptionPlan(data) {
+      return data.keys().hasAll(['planId', 'nameAr', 'nameEn', 'monthlyFeeEGP', 'orderCommissionPct', 'deliveryDiscountPct', 'isActive', 'updatedAt'])
+        && data.keys().hasOnly(['planId', 'nameAr', 'nameEn', 'monthlyFeeEGP', 'orderCommissionPct', 'deliveryDiscountPct', 'isActive', 'updatedAt'])
+        && isValidId(data.planId)
+        && isValidString(data.nameAr, 2, 100)
+        && isValidString(data.nameEn, 2, 100)
+        && data.monthlyFeeEGP is number && data.monthlyFeeEGP >= 0 && data.monthlyFeeEGP <= 1000000
+        && data.orderCommissionPct is number && data.orderCommissionPct >= 0 && data.orderCommissionPct <= 60
+        && data.deliveryDiscountPct is number && data.deliveryDiscountPct >= 0 && data.deliveryDiscountPct <= 100
+        && data.isActive is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCommissionRule(data) {
+      return data.keys().hasAll(['ruleId', 'defaultOrderCommissionPct', 'defaultDeliveryPlatformPct', 'defaultCourierSharePct', 'defaultUsufructPlatformPct', 'minDeliveryFeeEGP', 'updatedAt'])
+        && data.keys().hasOnly(['ruleId', 'defaultOrderCommissionPct', 'defaultDeliveryPlatformPct', 'defaultCourierSharePct', 'defaultUsufructPlatformPct', 'minDeliveryFeeEGP', 'updatedAt'])
+        && isValidId(data.ruleId)
+        && data.defaultOrderCommissionPct is number && data.defaultOrderCommissionPct >= 0 && data.defaultOrderCommissionPct <= 60
+        && data.defaultDeliveryPlatformPct is number && data.defaultDeliveryPlatformPct >= 0 && data.defaultDeliveryPlatformPct <= 80
+        && data.defaultCourierSharePct is number && data.defaultCourierSharePct >= 0 && data.defaultCourierSharePct <= 100
+        && (data.defaultDeliveryPlatformPct + data.defaultCourierSharePct) == 100
+        && data.defaultUsufructPlatformPct is number && data.defaultUsufructPlatformPct >= 1 && data.defaultUsufructPlatformPct <= 50
+        && data.minDeliveryFeeEGP is number && data.minDeliveryFeeEGP >= 10 && data.minDeliveryFeeEGP <= 10000
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLedgerSettlement(data) {
+      return data.keys().hasAll(['entryId', 'sourceType', 'referenceId', 'beneficiaryUid', 'grossAmountEGP', 'platformRevenueEGP', 'beneficiaryNetEGP', 'settlementStatus', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['entryId', 'sourceType', 'referenceId', 'tenantId', 'beneficiaryUid', 'grossAmountEGP', 'platformRevenueEGP', 'beneficiaryNetEGP', 'settlementStatus', 'createdAt', 'updatedAt'])
+        && isValidId(data.entryId)
+        && data.sourceType in ['order_commission', 'delivery_fee', 'subscription', 'usufruct_share']
+        && isValidId(data.referenceId)
+        && (!('tenantId' in data) || isValidString(data.tenantId, 0, 128))
+        && isValidId(data.beneficiaryUid)
+        && data.grossAmountEGP is number && data.grossAmountEGP >= 0 && data.grossAmountEGP <= 100000000
+        && data.platformRevenueEGP is number && data.platformRevenueEGP >= 0 && data.platformRevenueEGP <= 100000000
+        && data.beneficiaryNetEGP is number && data.beneficiaryNetEGP >= 0 && data.beneficiaryNetEGP <= 100000000
+        && data.settlementStatus in ['accrued', 'settled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['logId', 'actorUid', 'actionAr', 'actionEn', 'targetCollection', 'targetId', 'createdAt'])
+        && data.keys().hasOnly(['logId', 'actorUid', 'actionAr', 'actionEn', 'targetCollection', 'targetId', 'details', 'createdAt'])
+        && isValidId(data.logId)
+        && isValidId(data.actorUid)
+        && isValidString(data.actionAr, 2, 200)
+        && isValidString(data.actionEn, 2, 200)
+        && isValidString(data.targetCollection, 2, 80)
+        && isValidString(data.targetId, 1, 128)
+        && (!('details' in data) || isValidString(data.details, 0, 500))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['notifId', 'recipientUid', 'recipientRole', 'category', 'titleAr', 'titleEn', 'bodyAr', 'bodyEn', 'targetSection', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['notifId', 'recipientUid', 'recipientRole', 'tenantId', 'category', 'titleAr', 'titleEn', 'bodyAr', 'bodyEn', 'targetSection', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.notifId)
+        && isValidId(data.recipientUid)
+        && data.recipientRole in ['visitor', 'customer', 'employee', 'entity_admin', 'merchant_owner', 'merchant_staff', 'kitchen_partner', 'entertainment_partner', 'delivery_client', 'courier', 'opportunity_partner', 'finance_admin', 'central_admin', 'central_super_admin']
+        && (!('tenantId' in data) || isValidString(data.tenantId, 0, 128))
+        && data.category in ['onboarding', 'order', 'payment', 'delivery', 'offer', 'system']
+        && isValidString(data.titleAr, 2, 140)
+        && isValidString(data.titleEn, 2, 140)
+        && isValidString(data.bodyAr, 2, 400)
+        && isValidString(data.bodyEn, 2, 400)
+        && isValidString(data.targetSection, 2, 80)
+        && data.status in ['new', 'read', 'processed']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOfferAd(data) {
+      return data.keys().hasAll(['offerId', 'tenantId', 'category', 'titleAr', 'titleEn', 'discountBadgeAr', 'discountBadgeEn', 'ctaAr', 'ctaEn', 'countryCode', 'isApproved', 'isActive', 'createdByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['offerId', 'tenantId', 'category', 'titleAr', 'titleEn', 'discountBadgeAr', 'discountBadgeEn', 'ctaAr', 'ctaEn', 'countryCode', 'validFrom', 'validTo', 'targetScope', 'eligibleTenantIdsCsv', 'terms', 'isApproved', 'isActive', 'createdByUid', 'createdAt', 'updatedAt'])
+        && isValidId(data.offerId)
+        && isValidString(data.tenantId, 0, 128)
+        && data.category in ['food', 'shopping', 'factory_merchant']
+        && isValidString(data.titleAr, 2, 140)
+        && isValidString(data.titleEn, 2, 140)
+        && isValidString(data.discountBadgeAr, 1, 80)
+        && isValidString(data.discountBadgeEn, 1, 80)
+        && isValidString(data.ctaAr, 2, 60)
+        && isValidString(data.ctaEn, 2, 60)
+        && isValidCountry(data.countryCode)
+        && (!('validFrom' in data) || isValidString(data.validFrom, 0, 32))
+        && (!('validTo' in data) || isValidString(data.validTo, 0, 32))
+        && (!('targetScope' in data) || data.targetScope in ['public', 'contracted_entity', 'employee_tier'])
+        && (!('eligibleTenantIdsCsv' in data) || isValidString(data.eligibleTenantIdsCsv, 0, 500))
+        && (!('terms' in data) || isValidString(data.terms, 0, 500))
+        && data.isApproved is bool
+        && data.isActive is bool
+        && isValidId(data.createdByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPaymentTransaction(data) {
+      return data.keys().hasAll(['txId', 'payerUid', 'tenantId', 'orderId', 'provider', 'mode', 'countryCode', 'currency', 'amount', 'status', 'gatewayReference', 'idempotencyKey', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['txId', 'payerUid', 'tenantId', 'orderId', 'provider', 'mode', 'countryCode', 'currency', 'amount', 'status', 'gatewayReference', 'idempotencyKey', 'createdAt', 'updatedAt'])
+        && isValidId(data.txId)
+        && isValidId(data.payerUid)
+        && isValidString(data.tenantId, 2, 128)
+        && isValidString(data.orderId, 2, 128)
+        && data.provider in ['fawry', 'vodafone_cash', 'instapay', 'cash_on_delivery']
+        && data.mode in ['sandbox', 'live']
+        && isValidCountry(data.countryCode)
+        && isValidString(data.currency, 3, 8)
+        && data.amount is number && data.amount > 0 && data.amount <= 10000000
+        && data.status in ['Pending', 'Paid', 'Failed', 'Cancelled', 'Refunded']
+        && isValidString(data.gatewayReference, 2, 160)
+        && isValidString(data.idempotencyKey, 4, 128)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPaymentGatewayConfig(data) {
+      return data.keys().hasAll(['providerId', 'displayName', 'isEnabled', 'mode', 'merchantPublicId', 'countryCode', 'updatedByUid', 'updatedAt'])
+        && data.keys().hasOnly(['providerId', 'displayName', 'isEnabled', 'mode', 'merchantPublicId', 'countryCode', 'updatedByUid', 'updatedAt'])
+        && data.providerId in ['fawry', 'vodafone_cash', 'instapay', 'cash_on_delivery']
+        && isValidString(data.displayName, 2, 80)
+        && data.isEnabled is bool
+        && data.mode in ['sandbox', 'live']
+        && isValidString(data.merchantPublicId, 0, 120)
+        && isValidCountry(data.countryCode)
+        && isValidId(data.updatedByUid)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformSettings(data) {
+      return data.keys().hasAll(['settingId', 'autoActivateCustomers', 'requireAdminApprovalForPartners', 'defaultLanguage', 'defaultCountryCode', 'enabledCountriesCsv', 'updatedByUid', 'updatedAt'])
+        && data.keys().hasOnly([
+          'settingId',
+          'autoActivateCustomers',
+          'requireAdminApprovalForPartners',
+          'defaultLanguage',
+          'defaultCountryCode',
+          'enabledCountriesCsv',
+          'cmsPrimaryPurple',
+          'cmsAccentYellow',
+          'cmsHeroBadgeAr',
+          'cmsHeroTitleAr',
+          'cmsHeroSubtitleAr',
+          'cmsMenuOverridesJson',
+          'cmsIconOverridesJson',
+          'designatedBasitAdminEmailsCsv',
+          'designatedHabeApproverEmailsCsv',
+          'rolePermissionsMatrixJson',
+          'updatedByUid',
+          'updatedAt'
+        ])
+        && data.settingId == 'global'
+        && data.autoActivateCustomers is bool
+        && data.requireAdminApprovalForPartners is bool
+        && data.defaultLanguage in ['ar', 'en']
+        && isValidCountry(data.defaultCountryCode)
+        && isValidString(data.enabledCountriesCsv, 2, 64)
+        && (!('cmsPrimaryPurple' in data) || isValidString(data.cmsPrimaryPurple, 0, 16))
+        && (!('cmsAccentYellow' in data) || isValidString(data.cmsAccentYellow, 0, 16))
+        && (!('cmsHeroBadgeAr' in data) || isValidString(data.cmsHeroBadgeAr, 0, 80))
+        && (!('cmsHeroTitleAr' in data) || isValidString(data.cmsHeroTitleAr, 0, 180))
+        && (!('cmsHeroSubtitleAr' in data) || isValidString(data.cmsHeroSubtitleAr, 0, 400))
+        && (!('cmsMenuOverridesJson' in data) || isValidString(data.cmsMenuOverridesJson, 0, 24000))
+        && (!('cmsIconOverridesJson' in data) || isValidString(data.cmsIconOverridesJson, 0, 8000))
+        && (!('designatedBasitAdminEmailsCsv' in data) || isValidString(data.designatedBasitAdminEmailsCsv, 0, 2000))
+        && (!('designatedHabeApproverEmailsCsv' in data) || isValidString(data.designatedHabeApproverEmailsCsv, 0, 2000))
+        && (!('rolePermissionsMatrixJson' in data) || isValidString(data.rolePermissionsMatrixJson, 0, 12000))
+        && isValidId(data.updatedByUid)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEntertainmentBenefit(data) {
+      return data.keys().hasAll(['benefitId', 'partnerUid', 'venueName', 'category', 'imageUrl', 'description', 'approvedBenefitText', 'eligibilityScope', 'eligibleTenantIdsCsv', 'validFrom', 'validTo', 'terms', 'countryCode', 'isApproved', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['benefitId', 'partnerUid', 'venueName', 'category', 'imageUrl', 'description', 'approvedBenefitText', 'eligibilityScope', 'eligibleTenantIdsCsv', 'validFrom', 'validTo', 'terms', 'countryCode', 'isApproved', 'isActive', 'createdAt', 'updatedAt'])
+        && isValidId(data.benefitId)
+        && isValidId(data.partnerUid)
+        && isValidString(data.venueName, 2, 140)
+        && data.category in ['circus', 'amusement_park', 'club', 'hotel_resort', 'beach', 'kids_area', 'trip', 'seasonal']
+        && isValidString(data.imageUrl, 0, 500)
+        && isValidString(data.description, 4, 800)
+        && isValidString(data.approvedBenefitText, 2, 300)
+        && data.eligibilityScope in ['public', 'contracted_entity', 'employee_tier']
+        && isValidString(data.eligibleTenantIdsCsv, 0, 500)
+        && isValidString(data.validFrom, 0, 32)
+        && isValidString(data.validTo, 0, 32)
+        && isValidString(data.terms, 0, 500)
+        && isValidCountry(data.countryCode)
+        && data.isApproved is bool
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBenefitBooking(data) {
+      return data.keys().hasAll(['bookingId', 'uid', 'userName', 'tenantId', 'benefitId', 'venueName', 'requestedDate', 'peopleCount', 'notes', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['bookingId', 'uid', 'userName', 'tenantId', 'benefitId', 'venueName', 'requestedDate', 'peopleCount', 'notes', 'employerName', 'employeeCode', 'phone', 'discountLabel', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.bookingId)
+        && isValidId(data.uid)
+        && isValidString(data.userName, 2, 120)
+        && isValidString(data.tenantId, 0, 128)
+        && isValidId(data.benefitId)
+        && isValidString(data.venueName, 2, 140)
+        && isValidString(data.requestedDate, 4, 32)
+        && data.peopleCount is number && data.peopleCount >= 1 && data.peopleCount <= 500
+        && isValidString(data.notes, 0, 500)
+        && (!('employerName' in data) || isValidString(data.employerName, 0, 140))
+        && (!('employeeCode' in data) || isValidString(data.employeeCode, 0, 64))
+        && (!('phone' in data) || isValidString(data.phone, 0, 32))
+        && (!('discountLabel' in data) || isValidString(data.discountLabel, 0, 120))
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVipDirectOrder(data) {
+      return data.keys().hasAll(['orderId', 'customerUid', 'customerName', 'phone', 'sourceChannel', 'itemsSummary', 'items', 'totalEGP', 'paymentMethod', 'notes', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['orderId', 'customerUid', 'customerName', 'phone', 'sourceChannel', 'itemsSummary', 'items', 'totalEGP', 'paymentMethod', 'notes', 'status', 'ownerReply', 'createdAt', 'updatedAt'])
+        && isValidId(data.orderId)
+        && isValidId(data.customerUid)
+        && isValidString(data.customerName, 2, 120)
+        && isValidString(data.phone, 6, 32)
+        && data.sourceChannel in ['camel_liver_vip', 'cart_direct', 'al_ain_offer']
+        && isValidString(data.itemsSummary, 2, 1000)
+        && data.items is list && data.items.size() >= 1 && data.items.size() <= 50 && data.items[0] is map
+        && data.totalEGP is number && data.totalEGP >= 1 && data.totalEGP <= 10000000
+        && data.paymentMethod in ['fawry', 'vodafone_cash', 'instapay', 'cash_on_delivery']
+        && isValidString(data.notes, 0, 600)
+        && data.status in ['pending_owner', 'approved', 'preparing', 'completed', 'rejected']
+        && (!('ownerReply' in data) || isValidString(data.ownerReply, 0, 400))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCharityInitiative(data) {
+      return data.keys().hasAll(['initiativeId', 'titleAr', 'titleEn', 'executingEntity', 'mechanismAr', 'contributionType', 'targetGoalCount', 'recordedContributionsCount', 'verifiedDeliveriesCount', 'proofMediaUrl', 'isApproved', 'isActive', 'createdByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['initiativeId', 'titleAr', 'titleEn', 'executingEntity', 'mechanismAr', 'contributionType', 'targetGoalCount', 'recordedContributionsCount', 'verifiedDeliveriesCount', 'proofMediaUrl', 'isApproved', 'isActive', 'createdByUid', 'createdAt', 'updatedAt'])
+        && isValidId(data.initiativeId)
+        && isValidString(data.titleAr, 2, 160)
+        && isValidString(data.titleEn, 2, 160)
+        && isValidString(data.executingEntity, 2, 140)
+        && isValidString(data.mechanismAr, 4, 600)
+        && isValidString(data.contributionType, 2, 80)
+        && data.targetGoalCount is number && data.targetGoalCount >= 0 && data.targetGoalCount <= 10000000
+        && data.recordedContributionsCount is number && data.recordedContributionsCount >= 0 && data.recordedContributionsCount <= 10000000
+        && data.verifiedDeliveriesCount is number && data.verifiedDeliveriesCount >= 0 && data.verifiedDeliveriesCount <= 10000000
+        && isValidString(data.proofMediaUrl, 0, 500)
+        && data.isApproved is bool
+        && data.isActive is bool
+        && isValidId(data.createdByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCharityContribution(data) {
+      return data.keys().hasAll(['contributionId', 'initiativeId', 'initiativeTitle', 'contributorUid', 'contributorName', 'phone', 'contributionNote', 'pledgeAmountEGP', 'status', 'proofUrl', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['contributionId', 'initiativeId', 'initiativeTitle', 'contributorUid', 'contributorName', 'phone', 'contributionNote', 'pledgeAmountEGP', 'status', 'proofUrl', 'createdAt', 'updatedAt'])
+        && isValidId(data.contributionId)
+        && isValidId(data.initiativeId)
+        && isValidString(data.initiativeTitle, 2, 160)
+        && isValidId(data.contributorUid)
+        && isValidString(data.contributorName, 2, 120)
+        && isValidString(data.phone, 6, 32)
+        && isValidString(data.contributionNote, 0, 400)
+        && data.pledgeAmountEGP is number && data.pledgeAmountEGP >= 0 && data.pledgeAmountEGP <= 10000000
+        && data.status in ['recorded', 'executed_verified']
+        && isValidString(data.proofUrl, 0, 500)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKaffarahRule(data) {
+      return data.keys().hasAll(['ruleId', 'isOfficiallyApproved', 'shariaAuthorityName', 'referenceCode', 'unitCostEGP', 'mealsPerKaffarah', 'notesAr', 'updatedByUid', 'updatedAt'])
+        && data.keys().hasOnly(['ruleId', 'isOfficiallyApproved', 'shariaAuthorityName', 'referenceCode', 'unitCostEGP', 'mealsPerKaffarah', 'notesAr', 'updatedByUid', 'updatedAt'])
+        && data.ruleId == 'official'
+        && data.isOfficiallyApproved is bool
+        && isValidString(data.shariaAuthorityName, 2, 160)
+        && isValidString(data.referenceCode, 2, 100)
+        && data.unitCostEGP is number && data.unitCostEGP >= 0 && data.unitCostEGP <= 1000000
+        && data.mealsPerKaffarah is number && data.mealsPerKaffarah >= 0 && data.mealsPerKaffarah <= 10000
+        && isValidString(data.notesAr, 0, 600)
+        && isValidId(data.updatedByUid)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKaffarahOrder(data) {
+      return data.keys().hasAll(['orderId', 'requesterUid', 'donorName', 'phone', 'kaffarahCount', 'totalMeals', 'totalAmountEGP', 'shariaReferenceUsed', 'distributionNotes', 'executionStatus', 'executionProofUrl', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['orderId', 'requesterUid', 'donorName', 'phone', 'kaffarahCount', 'totalMeals', 'totalAmountEGP', 'shariaReferenceUsed', 'distributionNotes', 'executionStatus', 'executionProofUrl', 'createdAt', 'updatedAt'])
+        && isValidId(data.orderId)
+        && isValidId(data.requesterUid)
+        && isValidString(data.donorName, 2, 120)
+        && isValidString(data.phone, 6, 32)
+        && data.kaffarahCount is number && data.kaffarahCount >= 1 && data.kaffarahCount <= 1000
+        && data.totalMeals is number && data.totalMeals >= 1 && data.totalMeals <= 1000000
+        && data.totalAmountEGP is number && data.totalAmountEGP >= 1 && data.totalAmountEGP <= 100000000
+        && isValidString(data.shariaReferenceUsed, 2, 160)
+        && isValidString(data.distributionNotes, 0, 500)
+        && data.executionStatus in ['pending_verification', 'awaiting_execution', 'executed_verified']
+        && isValidString(data.executionProofUrl, 0, 500)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLogisticsServiceInquiry(data) {
+      return data.keys().hasAll(['inquiryId', 'requesterUid', 'serviceKey', 'organizationName', 'contactName', 'phone', 'eventDate', 'guestCount', 'city', 'notes', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['inquiryId', 'requesterUid', 'serviceKey', 'organizationName', 'contactName', 'phone', 'eventDate', 'guestCount', 'city', 'notes', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.inquiryId)
+        && isValidId(data.requesterUid)
+        && data.serviceKey in ['weddings_occasions', 'conferences_events', 'open_buffets', 'hospitality', 'central_kitchens_setup', 'institutional_events_catering', 'supply_distribution_logistics']
+        && isValidString(data.organizationName, 2, 140)
+        && isValidString(data.contactName, 2, 120)
+        && isValidString(data.phone, 6, 32)
+        && isValidString(data.eventDate, 4, 32)
+        && data.guestCount is number && data.guestCount >= 1 && data.guestCount <= 1000000
+        && isValidString(data.city, 2, 80)
+        && isValidString(data.notes, 0, 600)
+        && data.status in ['new', 'in_review', 'quoted']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCateringFeedback(data) {
+      return data.keys().hasAll(['feedbackId', 'authorUid', 'tenantId', 'category', 'subject', 'details', 'status', 'adminReply', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['feedbackId', 'authorUid', 'tenantId', 'category', 'subject', 'details', 'status', 'adminReply', 'createdAt', 'updatedAt'])
+        && isValidId(data.feedbackId)
+        && isValidId(data.authorUid)
+        && isValidString(data.tenantId, 2, 128)
+        && data.category in ['catering_quality', 'benefit_partner', 'general_complaint']
+        && isValidString(data.subject, 2, 160)
+        && isValidString(data.details, 4, 800)
+        && data.status in ['open', 'resolved']
+        && isValidString(data.adminReply, 0, 500)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOwnerFinancialAccount(data) {
+      return data.keys().hasAll(['accountId', 'labelAr', 'balanceEGP', 'updatedByEmail', 'updatedAt'])
+        && data.keys().hasOnly(['accountId', 'labelAr', 'balanceEGP', 'updatedByEmail', 'updatedAt'])
+        && data.accountId in ['bank', 'e_wallet', 'treasury']
+        && isValidString(data.labelAr, 2, 120)
+        && data.balanceEGP is number && data.balanceEGP >= -1000000000 && data.balanceEGP <= 1000000000
+        && isValidString(data.updatedByEmail, 5, 160)
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOwnerFinancialEntry(data) {
+      return data.keys().hasAll(['entryId', 'direction', 'sourceOrBeneficiary', 'purpose', 'expenseCategory', 'channel', 'grossEGP', 'commissionPct', 'commissionEGP', 'netEGP', 'entryDate', 'orderRef', 'createdByEmail', 'createdAt'])
+        && data.keys().hasOnly(['entryId', 'direction', 'sourceOrBeneficiary', 'purpose', 'expenseCategory', 'channel', 'grossEGP', 'commissionPct', 'commissionEGP', 'netEGP', 'entryDate', 'orderRef', 'createdByEmail', 'createdAt'])
+        && isValidId(data.entryId)
+        && data.direction in ['inflow', 'outflow']
+        && isValidString(data.sourceOrBeneficiary, 2, 160)
+        && isValidString(data.purpose, 2, 280)
+        && data.expenseCategory in ['none', 'salaries', 'raw_materials', 'marketing', 'commissions', 'logistics', 'other']
+        && data.channel in ['bank', 'e_wallet', 'treasury']
+        && data.grossEGP is number && data.grossEGP >= 0 && data.grossEGP <= 1000000000
+        && data.commissionPct is number && data.commissionPct >= 0 && data.commissionPct <= 100
+        && data.commissionEGP is number && data.commissionEGP >= 0 && data.commissionEGP <= 1000000000
+        && data.netEGP is number && data.netEGP >= 0 && data.netEGP <= 1000000000
+        && isValidString(data.entryDate, 8, 32)
+        && isValidString(data.orderRef, 0, 120)
+        && isValidString(data.createdByEmail, 5, 160)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidOwnerClientReceivable(data) {
+      return data.keys().hasAll(['receivableId', 'clientName', 'purpose', 'totalAmountEGP', 'collectedAmountEGP', 'dueDate', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['receivableId', 'clientName', 'purpose', 'totalAmountEGP', 'collectedAmountEGP', 'dueDate', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.receivableId)
+        && isValidString(data.clientName, 2, 160)
+        && isValidString(data.purpose, 2, 240)
+        && data.totalAmountEGP is number && data.totalAmountEGP > 0 && data.totalAmountEGP <= 1000000000
+        && data.collectedAmountEGP is number && data.collectedAmountEGP >= 0 && data.collectedAmountEGP <= data.totalAmountEGP
+        && isValidString(data.dueDate, 8, 32)
+        && data.status in ['open', 'partial', 'collected']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOwnerSupplierPayable(data) {
+      return data.keys().hasAll(['payableId', 'supplierName', 'purpose', 'totalAmountEGP', 'paidAmountEGP', 'scheduledPaymentDate', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['payableId', 'supplierName', 'purpose', 'totalAmountEGP', 'paidAmountEGP', 'scheduledPaymentDate', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.payableId)
+        && isValidString(data.supplierName, 2, 160)
+        && isValidString(data.purpose, 2, 240)
+        && data.totalAmountEGP is number && data.totalAmountEGP > 0 && data.totalAmountEGP <= 1000000000
+        && data.paidAmountEGP is number && data.paidAmountEGP >= 0 && data.paidAmountEGP <= data.totalAmountEGP
+        && isValidString(data.scheduledPaymentDate, 8, 32)
+        && data.status in ['scheduled', 'partial', 'paid']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOwnerFinancialAuditLog(data) {
+      return data.keys().hasAll(['logId', 'actorEmail', 'actionAr', 'category', 'amountEGP', 'details', 'createdAt'])
+        && data.keys().hasOnly(['logId', 'actorEmail', 'actionAr', 'category', 'amountEGP', 'details', 'createdAt'])
+        && isValidId(data.logId)
+        && isValidString(data.actorEmail, 5, 160)
+        && isValidString(data.actionAr, 2, 240)
+        && data.category in ['inflow', 'outflow', 'balance', 'receivable', 'payable', 'security_2fa', 'ai_investor', 'pdf_export']
+        && data.amountEGP is number && data.amountEGP >= 0 && data.amountEGP <= 1000000000
+        && isValidString(data.details, 0, 400)
+        && data.createdAt is timestamp;
+    }
+
+    // =========================================================================
+    // COLLECTION MATCH BLOCKS (100% Coverage of blueprint paths)
+    // =========================================================================
+
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if isBootstrappedAdmin();
+      allow create, update: if isValidId(adminUid) && isBootstrappedAdmin()
+        && isValidAdminRecord(incoming())
+        && incoming().uid == adminUid;
+      allow delete: if isValidId(adminUid) && isBootstrappedAdmin();
+    }
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().uid == request.auth.uid);
+
+      allow create: if isValidId(userId)
+        && isSignedIn()
+        && isValidUserProfile(incoming())
+        && incoming().uid == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            isOwner(userId)
+            && incoming().role in ['visitor', 'customer']
+            && incoming().status in ['active', 'pending']
+          )
+        );
+
+      allow update: if isValidId(userId)
+        && isSignedIn()
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            isOwner(userId)
+            && incoming().role == existing().role
+            && incoming().status == existing().status
+            && (!('tenantId' in existing()) || incoming().tenantId == existing().tenantId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'countryCode', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(userId) && isAdmin();
+
+      match /private_profile/{docId} {
+        allow get: if isValidId(userId) && isValidId(docId) && (isOwner(userId) || isAdmin());
+        allow list: if isOwner(userId) || isBootstrappedAdmin();
+        allow create, update: if isValidId(userId) && isValidId(docId)
+          && (isOwner(userId) || isAdmin())
+          && isValidUserPrivateProfile(incoming())
+          && incoming().uid == userId
+          && incoming().updatedAt == request.time;
+        allow delete: if isValidId(userId) && isValidId(docId) && isAdmin();
+      }
+    }
+
+    match /onboarding_applications/{appId} {
+      allow get: if isValidId(appId) && isSignedIn() && (existing().applicantUid == request.auth.uid || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().applicantUid == request.auth.uid);
+
+      allow create: if isValidId(appId)
+        && isSignedIn()
+        && isValidOnboardingApplication(incoming())
+        && incoming().appId == appId
+        && incoming().applicantUid == request.auth.uid
+        && incoming().status == 'pending_review'
+        && !('reviewedByUid' in incoming())
+        && !('createdTenantId' in incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(appId)
+        && isSignedIn()
+        && isValidOnboardingApplication(incoming())
+        && incoming().appId == existing().appId
+        && incoming().applicantUid == existing().applicantUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            existing().applicantUid == request.auth.uid
+            && existing().status == 'needs_info'
+            && incoming().status == 'pending_review'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['businessName', 'contactName', 'phone', 'city', 'commercialRegRef', 'notes', 'status', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(appId) && isAdmin();
+    }
+
+    match /tenants/{tenantId} {
+      allow get: if isValidId(tenantId) && (isTenantOwnerOrMember(tenantId) || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid);
+
+      allow create: if isValidId(tenantId)
+        && isAdmin()
+        && isValidTenantWorkspace(incoming())
+        && incoming().tenantId == tenantId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(tenantId)
+        && isSignedIn()
+        && isValidTenantWorkspace(incoming())
+        && incoming().tenantId == existing().tenantId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            existing().ownerUid == request.auth.uid
+            && existing().status == 'active'
+            && incoming().status == existing().status
+            && incoming().planId == existing().planId
+            && incoming().customCommissionPct == existing().customCommissionPct
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'city', 'deliveryEnabled', 'logoUrl', 'cateringScheduleText', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(tenantId) && isAdmin();
+
+      match /members/{memberUid} {
+        allow get: if isValidId(tenantId) && isValidId(memberUid)
+          && (isOwner(memberUid) || isTenantOwnerOrMember(tenantId) || isAdmin());
+        allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().uid == request.auth.uid);
+        allow create, update: if isValidId(tenantId) && isValidId(memberUid)
+          && isValidTenantMember(incoming())
+          && incoming().tenantId == tenantId
+          && incoming().uid == memberUid
+          && incoming().createdAt == request.time
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid
+          );
+        allow delete: if isValidId(tenantId) && isValidId(memberUid)
+          && (
+            isAdmin() ||
+            get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid
+          );
+      }
+    }
+
+    match /public_storefronts/{tenantId} {
+      allow get: if isValidId(tenantId) && (existing().isActive == true || isAdmin());
+      allow list: if existing().isActive == true || isBootstrappedAdmin();
+      allow create, update: if isValidId(tenantId)
+        && isAdmin()
+        && isValidPublicStorefront(incoming())
+        && incoming().tenantId == tenantId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(tenantId) && isAdmin();
+    }
+
+    match /catalog_items/{itemId} {
+      allow get: if isValidId(itemId) && (
+        existing().isAvailable == true ||
+        (isSignedIn() && (existing().merchantOwnerUid == request.auth.uid || isActiveTenantMember(existing().tenantId))) ||
+        isAdmin()
+      );
+      allow list: if existing().isAvailable == true
+        || (isSignedIn() && existing().merchantOwnerUid == request.auth.uid)
+        || isBootstrappedAdmin();
+
+      allow create: if isValidId(itemId)
+        && isSignedIn()
+        && isValidCatalogItem(incoming())
+        && incoming().itemId == itemId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            exists(/databases/$(database)/documents/tenants/$(incoming().tenantId))
+            && get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.status == 'active'
+            && get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.ownerUid == request.auth.uid
+            && incoming().merchantOwnerUid == request.auth.uid
+          )
+        );
+
+      allow update: if isValidId(itemId)
+        && isSignedIn()
+        && isValidCatalogItem(incoming())
+        && incoming().itemId == existing().itemId
+        && incoming().tenantId == existing().tenantId
+        && incoming().merchantOwnerUid == existing().merchantOwnerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            (existing().merchantOwnerUid == request.auth.uid || isActiveTenantMember(existing().tenantId))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'category', 'priceEGP', 'stockQty', 'isAvailable', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(itemId) && isSignedIn() && (existing().merchantOwnerUid == request.auth.uid || isAdmin());
+    }
+
+    match /commercial_orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (
+        existing().customerUid == request.auth.uid ||
+        existing().merchantOwnerUid == request.auth.uid ||
+        isActiveTenantMember(existing().tenantId) ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          existing().customerUid == request.auth.uid ||
+          existing().merchantOwnerUid == request.auth.uid
+        )
+      );
+
+      allow create: if isValidId(orderId)
+        && isSignedIn()
+        && isValidCommercialOrder(incoming())
+        && incoming().orderId == orderId
+        && incoming().customerUid == request.auth.uid
+        && incoming().status == 'pending_merchant'
+        && exists(/databases/$(database)/documents/tenants/$(incoming().tenantId))
+        && get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.status == 'active'
+        && incoming().merchantOwnerUid == get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.ownerUid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(orderId)
+        && isSignedIn()
+        && isValidCommercialOrder(incoming())
+        && incoming().orderId == existing().orderId
+        && incoming().tenantId == existing().tenantId
+        && incoming().merchantOwnerUid == existing().merchantOwnerUid
+        && incoming().customerUid == existing().customerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            !(existing().status in ['completed', 'cancelled']) && (
+              (
+                (existing().merchantOwnerUid == request.auth.uid || isActiveTenantMember(existing().tenantId))
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+                && incoming().status in ['accepted_preparing', 'ready_for_pickup', 'in_delivery', 'completed', 'cancelled']
+              ) || (
+                existing().customerUid == request.auth.uid
+                && existing().status == 'pending_merchant'
+                && incoming().status == 'cancelled'
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+            )
+          )
+        );
+
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    match /couriers/{courierUid} {
+      allow get: if isValidId(courierUid) && (isOwner(courierUid) || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().courierUid == request.auth.uid);
+
+      allow create: if isValidId(courierUid)
+        && isAdmin()
+        && isValidCourierProfile(incoming())
+        && incoming().courierUid == courierUid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(courierUid)
+        && isSignedIn()
+        && isValidCourierProfile(incoming())
+        && incoming().courierUid == existing().courierUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            isOwner(courierUid)
+            && existing().isApproved == true
+            && incoming().isApproved == existing().isApproved
+            && incoming().walletBalanceEGP == existing().walletBalanceEGP
+            && incoming().completedDeliveries == existing().completedDeliveries
+            && incoming().diff(existing()).affectedKeys().hasOnly(['isOnline', 'zone', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(courierUid) && isAdmin();
+    }
+
+    match /delivery_requests/{deliveryId} {
+      allow get: if isValidId(deliveryId) && isSignedIn() && (
+        existing().requesterUid == request.auth.uid ||
+        existing().assignedCourierUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          existing().requesterUid == request.auth.uid ||
+          existing().assignedCourierUid == request.auth.uid
+        )
+      );
+
+      allow create: if isValidId(deliveryId)
+        && isSignedIn()
+        && isValidDeliveryRequest(incoming())
+        && incoming().deliveryId == deliveryId
+        && incoming().requesterUid == request.auth.uid
+        && incoming().status == 'requested'
+        && incoming().assignedCourierUid == ''
+        && exists(/databases/$(database)/documents/tenants/$(incoming().tenantId))
+        && get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.ownerUid == request.auth.uid
+        && get(/databases/$(database)/documents/tenants/$(incoming().tenantId)).data.status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(deliveryId)
+        && isSignedIn()
+        && isValidDeliveryRequest(incoming())
+        && incoming().deliveryId == existing().deliveryId
+        && incoming().requesterUid == existing().requesterUid
+        && incoming().tenantId == existing().tenantId
+        && incoming().deliveryFeeEGP == existing().deliveryFeeEGP
+        && incoming().courierShareEGP == existing().courierShareEGP
+        && incoming().platformDeliveryFeeEGP == existing().platformDeliveryFeeEGP
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            !(existing().status in ['delivered', 'cancelled']) && (
+              (
+                existing().assignedCourierUid == request.auth.uid
+                && incoming().assignedCourierUid == existing().assignedCourierUid
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'podConfirmationNote', 'updatedAt'])
+                && (
+                  (existing().status == 'assigned' && incoming().status == 'picked_up') ||
+                  (existing().status == 'picked_up' && incoming().status == 'in_transit') ||
+                  (existing().status == 'in_transit' && incoming().status == 'delivered')
+                )
+              ) || (
+                existing().requesterUid == request.auth.uid
+                && existing().status == 'requested'
+                && incoming().status == 'cancelled'
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+              )
+            )
+          )
+        );
+
+      allow delete: if isValidId(deliveryId) && isAdmin();
+    }
+
+    match /opportunities/{oppId} {
+      allow get: if isValidId(oppId) && (
+        existing().approvalStatus == 'approved' ||
+        (isSignedIn() && existing().ownerUid == request.auth.uid) ||
+        isAdmin()
+      );
+      allow list: if existing().approvalStatus == 'approved'
+        || (isSignedIn() && existing().ownerUid == request.auth.uid)
+        || isBootstrappedAdmin();
+
+      allow create: if isValidId(oppId)
+        && isSignedIn()
+        && isValidFaydOpportunity(incoming())
+        && incoming().oppId == oppId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().approvalStatus == 'pending_admin'
+        && incoming().freeResourceBlocked == true
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(oppId)
+        && isSignedIn()
+        && isValidFaydOpportunity(incoming())
+        && incoming().oppId == existing().oppId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            existing().ownerUid == request.auth.uid
+            && existing().approvalStatus != 'rejected'
+            && incoming().approvalStatus == existing().approvalStatus
+            && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'description', 'commercialTerms', 'costOrInvestmentEGP', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(oppId) && isAdmin();
+    }
+
+    match /usufruct_proposals/{proposalId} {
+      allow get: if isValidId(proposalId) && isSignedIn() && (
+        existing().proposerUid == request.auth.uid ||
+        existing().opportunityOwnerUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          existing().proposerUid == request.auth.uid ||
+          existing().opportunityOwnerUid == request.auth.uid
+        )
+      );
+
+      allow create: if isValidId(proposalId)
+        && isSignedIn()
+        && isValidUsufructProposal(incoming())
+        && incoming().proposalId == proposalId
+        && incoming().proposerUid == request.auth.uid
+        && incoming().proposerAgreed == true
+        && incoming().siteOwnerAgreed == false
+        && incoming().adminApproved == false
+        && incoming().status == 'awaiting_site_owner'
+        && exists(/databases/$(database)/documents/opportunities/$(incoming().opportunityId))
+        && get(/databases/$(database)/documents/opportunities/$(incoming().opportunityId)).data.approvalStatus == 'approved'
+        && incoming().opportunityOwnerUid == get(/databases/$(database)/documents/opportunities/$(incoming().opportunityId)).data.ownerUid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(proposalId)
+        && isSignedIn()
+        && isValidUsufructProposal(incoming())
+        && incoming().proposalId == existing().proposalId
+        && incoming().opportunityId == existing().opportunityId
+        && incoming().opportunityOwnerUid == existing().opportunityOwnerUid
+        && incoming().proposerUid == existing().proposerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            !(existing().status in ['contract_issued', 'rejected']) &&
+            existing().opportunityOwnerUid == request.auth.uid &&
+            existing().status == 'awaiting_site_owner' &&
+            incoming().adminApproved == false &&
+            incoming().diff(existing()).affectedKeys().hasOnly(['siteOwnerAgreed', 'status', 'updatedAt']) &&
+            (
+              (incoming().siteOwnerAgreed == true && incoming().status == 'awaiting_admin') ||
+              (incoming().siteOwnerAgreed == false && incoming().status == 'rejected')
+            )
+          )
+        );
+
+      allow delete: if isValidId(proposalId) && isAdmin();
+    }
+
+    match /usufruct_contracts/{contractId} {
+      allow get: if isValidId(contractId) && isSignedIn() && (
+        existing().proposerUid == request.auth.uid ||
+        existing().opportunityOwnerUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          existing().proposerUid == request.auth.uid ||
+          existing().opportunityOwnerUid == request.auth.uid
+        )
+      );
+
+      allow create: if isValidId(contractId)
+        && isAdmin()
+        && isValidUsufructContract(incoming())
+        && incoming().contractId == contractId
+        && incoming().approvedByAdminUid == request.auth.uid
+        && exists(/databases/$(database)/documents/usufruct_proposals/$(incoming().proposalId))
+        && get(/databases/$(database)/documents/usufruct_proposals/$(incoming().proposalId)).data.proposerAgreed == true
+        && get(/databases/$(database)/documents/usufruct_proposals/$(incoming().proposalId)).data.siteOwnerAgreed == true
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(contractId)
+        && isAdmin()
+        && isValidUsufructContract(incoming())
+        && incoming().contractId == existing().contractId
+        && incoming().proposalId == existing().proposalId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if false;
+    }
+
+    match /subscription_plans/{planId} {
+      allow get: if isValidId(planId);
+      allow list: if existing().isActive == true || isBootstrappedAdmin() || isFinanceAdmin();
+      allow create, update: if isValidId(planId)
+        && isAdmin()
+        && isValidSubscriptionPlan(incoming())
+        && incoming().planId == planId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(planId) && isAdmin();
+    }
+
+    match /commission_rules/{ruleId} {
+      allow get: if isValidId(ruleId) && isSignedIn();
+      allow list: if isBootstrappedAdmin() || isFinanceAdmin() || (isSignedIn() && existing().ruleId == 'global');
+      allow create, update: if isValidId(ruleId)
+        && isAdmin()
+        && isValidCommissionRule(incoming())
+        && incoming().ruleId == ruleId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(ruleId) && isAdmin();
+    }
+
+    match /ledger_settlements/{entryId} {
+      allow get: if isValidId(entryId) && isSignedIn() && (
+        existing().beneficiaryUid == request.auth.uid ||
+        isAdmin() ||
+        isFinanceAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || isFinanceAdmin() || (
+        isSignedIn() && existing().beneficiaryUid == request.auth.uid
+      );
+
+      allow create: if isValidId(entryId)
+        && isAdmin()
+        && isValidLedgerSettlement(incoming())
+        && incoming().entryId == entryId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(entryId)
+        && isAdmin()
+        && isValidLedgerSettlement(incoming())
+        && existing().settlementStatus != 'settled'
+        && incoming().entryId == existing().entryId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+
+      allow delete: if false;
+    }
+
+    match /audit_logs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isBootstrappedAdmin();
+      allow create: if isValidId(logId)
+        && isSignedIn()
+        && isValidAuditLog(incoming())
+        && incoming().logId == logId
+        && incoming().actorUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /notifications/{notifId} {
+      allow get: if isValidId(notifId) && isSignedIn() && (
+        existing().recipientUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && existing().recipientUid == request.auth.uid
+      );
+      allow create: if isValidId(notifId)
+        && isSignedIn()
+        && isValidNotification(incoming())
+        && incoming().notifId == notifId
+        && incoming().status == 'new'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          incoming().recipientUid == request.auth.uid ||
+          (
+            incoming().recipientUid == 'owner_central_admin'
+            && incoming().recipientRole == 'central_super_admin'
+            && incoming().category in ['order', 'offer', 'onboarding', 'system']
+          )
+        );
+      allow update: if isValidId(notifId)
+        && isSignedIn()
+        && isValidNotification(incoming())
+        && incoming().notifId == existing().notifId
+        && incoming().recipientUid == existing().recipientUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            existing().recipientUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(notifId) && isAdmin();
+    }
+
+    match /offers_ads/{offerId} {
+      allow get: if isValidId(offerId) && (
+        (existing().isApproved == true && existing().isActive == true) ||
+        isAdmin()
+      );
+      allow list: if (existing().isApproved == true && existing().isActive == true) || isBootstrappedAdmin();
+      allow create, update: if isValidId(offerId)
+        && isAdmin()
+        && isValidOfferAd(incoming())
+        && incoming().offerId == offerId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(offerId) && isAdmin();
+    }
+
+    match /payment_transactions/{txId} {
+      allow get: if isValidId(txId) && isSignedIn() && (
+        existing().payerUid == request.auth.uid ||
+        isAdmin() ||
+        isFinanceAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || isFinanceAdmin() || (
+        isSignedIn() && existing().payerUid == request.auth.uid
+      );
+      allow create: if isValidId(txId)
+        && isSignedIn()
+        && isValidPaymentTransaction(incoming())
+        && incoming().txId == txId
+        && incoming().payerUid == request.auth.uid
+        && incoming().status == 'Pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(txId)
+        && isSignedIn()
+        && isValidPaymentTransaction(incoming())
+        && incoming().txId == existing().txId
+        && incoming().payerUid == existing().payerUid
+        && incoming().idempotencyKey == existing().idempotencyKey
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            existing().payerUid == request.auth.uid
+            && existing().status == 'Pending'
+            && existing().mode == 'sandbox'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && incoming().status in ['Paid', 'Failed', 'Cancelled']
+          )
+        );
+      allow delete: if isValidId(txId) && isAdmin();
+    }
+
+    match /payment_gateway_configs/{providerId} {
+      allow get: if isValidId(providerId) && (existing().isEnabled == true || isAdmin() || isFinanceAdmin());
+      allow list: if existing().isEnabled == true || isBootstrappedAdmin() || isFinanceAdmin();
+      allow create, update: if isValidId(providerId)
+        && isAdmin()
+        && isValidPaymentGatewayConfig(incoming())
+        && incoming().providerId == providerId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(providerId) && isAdmin();
+    }
+
+    match /platform_settings/{settingId} {
+      allow get: if settingId == 'global';
+      allow list: if isBootstrappedAdmin() || existing().settingId == 'global';
+      allow create: if settingId == 'global'
+        && isAdmin()
+        && isValidPlatformSettings(incoming())
+        && incoming().settingId == 'global'
+        && incoming().updatedAt == request.time
+        && (
+          isBootstrappedAdmin() ||
+          (!('designatedBasitAdminEmailsCsv' in incoming()) && !('designatedHabeApproverEmailsCsv' in incoming()) && !('rolePermissionsMatrixJson' in incoming()))
+        );
+      allow update: if settingId == 'global'
+        && isAdmin()
+        && isValidPlatformSettings(incoming())
+        && incoming().settingId == 'global'
+        && incoming().updatedAt == request.time
+        && (
+          isBootstrappedAdmin() ||
+          !incoming().diff(existing()).affectedKeys().hasAny(['designatedBasitAdminEmailsCsv', 'designatedHabeApproverEmailsCsv', 'rolePermissionsMatrixJson'])
+        );
+      allow delete: if false;
+    }
+
+    match /entertainment_benefits/{benefitId} {
+      allow get: if isValidId(benefitId) && (
+        (existing().isApproved == true && existing().isActive == true) ||
+        (isSignedIn() && existing().partnerUid == request.auth.uid) ||
+        isAdmin()
+      );
+      allow list: if (existing().isApproved == true && existing().isActive == true)
+        || (isSignedIn() && existing().partnerUid == request.auth.uid)
+        || isBootstrappedAdmin();
+      allow create: if isValidId(benefitId)
+        && isSignedIn()
+        && isValidEntertainmentBenefit(incoming())
+        && incoming().benefitId == benefitId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (incoming().partnerUid == request.auth.uid && incoming().isApproved == false)
+        );
+      allow update: if isValidId(benefitId)
+        && isAdmin()
+        && isValidEntertainmentBenefit(incoming())
+        && incoming().benefitId == existing().benefitId
+        && incoming().partnerUid == existing().partnerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(benefitId) && isAdmin();
+    }
+
+    match /benefit_bookings/{bookingId} {
+      allow get: if isValidId(bookingId) && isSignedIn() && (existing().uid == request.auth.uid || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().uid == request.auth.uid);
+      allow create: if isValidId(bookingId)
+        && isSignedIn()
+        && isValidBenefitBooking(incoming())
+        && incoming().bookingId == bookingId
+        && incoming().uid == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(bookingId)
+        && isAdmin()
+        && isValidBenefitBooking(incoming())
+        && incoming().bookingId == existing().bookingId
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(bookingId) && isAdmin();
+    }
+
+    match /charity_initiatives/{initiativeId} {
+      allow get: if isValidId(initiativeId) && (
+        (existing().isApproved == true && existing().isActive == true) ||
+        isAdmin()
+      );
+      allow list: if (existing().isApproved == true && existing().isActive == true) || isBootstrappedAdmin();
+      allow create, update: if isValidId(initiativeId)
+        && isAdmin()
+        && isValidCharityInitiative(incoming())
+        && incoming().initiativeId == initiativeId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(initiativeId) && isAdmin();
+    }
+
+    match /charity_contributions/{contributionId} {
+      allow get: if isValidId(contributionId) && isSignedIn() && (
+        existing().contributorUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().contributorUid == request.auth.uid);
+      allow create: if isValidId(contributionId)
+        && isSignedIn()
+        && isValidCharityContribution(incoming())
+        && incoming().contributionId == contributionId
+        && incoming().contributorUid == request.auth.uid
+        && incoming().status == 'recorded'
+        && incoming().proofUrl == ''
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(contributionId)
+        && isAdmin()
+        && isValidCharityContribution(incoming())
+        && incoming().contributionId == existing().contributionId
+        && incoming().contributorUid == existing().contributorUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (incoming().status != 'executed_verified' || incoming().proofUrl.size() >= 8);
+      allow delete: if isValidId(contributionId) && isAdmin();
+    }
+
+    match /kaffarah_rules/{ruleId} {
+      allow get: if ruleId == 'official';
+      allow list: if existing().ruleId == 'official' || isBootstrappedAdmin();
+      allow create, update: if ruleId == 'official'
+        && isAdmin()
+        && isValidKaffarahRule(incoming())
+        && incoming().ruleId == 'official'
+        && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /kaffarah_orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (
+        existing().requesterUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().requesterUid == request.auth.uid);
+      allow create: if isValidId(orderId)
+        && isSignedIn()
+        && isValidKaffarahOrder(incoming())
+        && incoming().orderId == orderId
+        && incoming().requesterUid == request.auth.uid
+        && incoming().executionStatus in ['pending_verification', 'awaiting_execution']
+        && incoming().executionProofUrl == ''
+        && exists(/databases/$(database)/documents/kaffarah_rules/official)
+        && get(/databases/$(database)/documents/kaffarah_rules/official).data.isOfficiallyApproved == true
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(orderId)
+        && isAdmin()
+        && isValidKaffarahOrder(incoming())
+        && incoming().orderId == existing().orderId
+        && incoming().requesterUid == existing().requesterUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (incoming().executionStatus != 'executed_verified' || incoming().executionProofUrl.size() >= 8);
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    match /logistics_service_inquiries/{inquiryId} {
+      allow get: if isValidId(inquiryId) && isSignedIn() && (
+        existing().requesterUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().requesterUid == request.auth.uid);
+      allow create: if isValidId(inquiryId)
+        && isSignedIn()
+        && isValidLogisticsServiceInquiry(incoming())
+        && incoming().inquiryId == inquiryId
+        && incoming().requesterUid == request.auth.uid
+        && incoming().status == 'new'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(inquiryId)
+        && isAdmin()
+        && isValidLogisticsServiceInquiry(incoming())
+        && incoming().inquiryId == existing().inquiryId
+        && incoming().requesterUid == existing().requesterUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(inquiryId) && isAdmin();
+    }
+
+    match /catering_feedback/{feedbackId} {
+      allow get: if isValidId(feedbackId) && isSignedIn() && (
+        existing().authorUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().authorUid == request.auth.uid);
+      allow create: if isValidId(feedbackId)
+        && isSignedIn()
+        && isValidCateringFeedback(incoming())
+        && incoming().feedbackId == feedbackId
+        && incoming().authorUid == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(feedbackId)
+        && isAdmin()
+        && isValidCateringFeedback(incoming())
+        && incoming().feedbackId == existing().feedbackId
+        && incoming().authorUid == existing().authorUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(feedbackId) && isAdmin();
+    }
+
+    match /vip_direct_orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (
+        existing().customerUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && existing().customerUid == request.auth.uid
+      );
+      allow create: if isValidId(orderId)
+        && isSignedIn()
+        && isValidVipDirectOrder(incoming())
+        && incoming().orderId == orderId
+        && incoming().customerUid == request.auth.uid
+        && incoming().status == 'pending_owner'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(orderId)
+        && isAdmin()
+        && isValidVipDirectOrder(incoming())
+        && incoming().orderId == existing().orderId
+        && incoming().customerUid == existing().customerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    // Strict App-Owner-Only Financial Dashboard Collections (ONLY hamzaelhelaly08@gmail.com)
+    match /owner_financial_accounts/{accountId} {
+      allow get, list: if isBootstrappedAdmin();
+      allow create, update: if isValidId(accountId)
+        && isBootstrappedAdmin()
+        && isValidOwnerFinancialAccount(incoming())
+        && incoming().accountId == accountId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(accountId) && isBootstrappedAdmin();
+    }
+
+    match /owner_financial_entries/{entryId} {
+      allow get, list: if isBootstrappedAdmin();
+      allow create: if isValidId(entryId)
+        && isBootstrappedAdmin()
+        && isValidOwnerFinancialEntry(incoming())
+        && incoming().entryId == entryId
+        && incoming().createdAt == request.time;
+      allow update: if isValidId(entryId)
+        && isBootstrappedAdmin()
+        && isValidOwnerFinancialEntry(incoming())
+        && incoming().entryId == existing().entryId
+        && incoming().createdAt == existing().createdAt;
+      allow delete: if isValidId(entryId) && isBootstrappedAdmin();
+    }
+
+    match /owner_client_receivables/{receivableId} {
+      allow get, list: if isBootstrappedAdmin();
+      allow create: if isValidId(receivableId)
+        && isBootstrappedAdmin()
+        && isValidOwnerClientReceivable(incoming())
+        && incoming().receivableId == receivableId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(receivableId)
+        && isBootstrappedAdmin()
+        && isValidOwnerClientReceivable(incoming())
+        && incoming().receivableId == existing().receivableId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(receivableId) && isBootstrappedAdmin();
+    }
+
+    match /owner_supplier_payables/{payableId} {
+      allow get, list: if isBootstrappedAdmin();
+      allow create: if isValidId(payableId)
+        && isBootstrappedAdmin()
+        && isValidOwnerSupplierPayable(incoming())
+        && incoming().payableId == payableId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(payableId)
+        && isBootstrappedAdmin()
+        && isValidOwnerSupplierPayable(incoming())
+        && incoming().payableId == existing().payableId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(payableId) && isBootstrappedAdmin();
+    }
+
+    match /owner_financial_audit_logs/{logId} {
+      allow get, list: if isBootstrappedAdmin();
+      allow create: if isValidId(logId)
+        && isBootstrappedAdmin()
+        && isValidOwnerFinancialAuditLog(incoming())
+        && incoming().logId == logId
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>BASIT | باسط — منظومة الإعاشة والتغذية والمزايا للشركة الوطنية اللوجستية</title>
+    <meta name="description" content="منصة BASIT | باسط — الذراع الرقمي للشركة الوطنية اللوجستية لإدارة وتشغيل خدمات الإعاشة والتغذية للمصانع والشركات والترفيه والمزايا" />
+    <meta property="og:title" content="BASIT | باسط — National Logistics Catering, Corporate Benefits & Hospitality" />
+    <meta property="og:description" content="منصة BASIT | باسط — إدارة وتشغيل خدمات الإعاشة والتغذية والترفيه والمزايا للكيانات المتعاقدة مع الشركة الوطنية اللوجستية" />
+    <meta property="og:type" content="website" />
+    <meta name="theme-color" id="app-theme-color" content="#62339A" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" id="app-apple-title" content="BASIT | باسط" />
+    <link rel="apple-touch-icon" id="app-apple-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" id="app-favicon" href="/pwa-192x192.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <script>
+      (function () {
+        try {
+          var p = new URLSearchParams(window.location.search);
+          var isHabe = p.get('view') === 'al_ain_habe';
+          if (isHabe) {
+            document.title = 'Ha-Be | نقطة موظفي ها-بي — National Logistics';
+            var tc = document.getElementById('app-theme-color');
+            if (tc) tc.setAttribute('content', '#dc2626');
+            var at = document.getElementById('app-apple-title');
+            if (at) at.setAttribute('content', 'Ha-Be');
+            var ai = document.getElementById('app-apple-icon');
+            if (ai) ai.setAttribute('href', '/habe-apple-touch-icon.png');
+            var fv = document.getElementById('app-favicon');
+            if (fv) fv.setAttribute('href', '/habe-icon-192.png');
+
+            var ensureSingleHabeManifest = function () {
+              var links = document.querySelectorAll('link[rel="manifest"]');
+              var foundHabe = false;
+              links.forEach(function (lnk) {
+                var href = lnk.getAttribute('href') || '';
+                if (href.indexOf('manifest-habe.webmanifest') !== -1 && !foundHabe) {
+                  lnk.id = 'app-dynamic-manifest';
+                  foundHabe = true;
+                } else {
+                  lnk.parentNode && lnk.parentNode.removeChild(lnk);
+                }
+              });
+              if (!foundHabe) {
+                var ml = document.createElement('link');
+                ml.id = 'app-dynamic-manifest';
+                ml.rel = 'manifest';
+                ml.href = '/manifest-habe.webmanifest';
+                document.head.appendChild(ml);
+              }
+            };
+
+            ensureSingleHabeManifest();
+            if (typeof MutationObserver !== 'undefined') {
+              var obs = new MutationObserver(ensureSingleHabeManifest);
+              obs.observe(document.head, { childList: true });
+              window.addEventListener('DOMContentLoaded', function () {
+                ensureSingleHabeManifest();
+                setTimeout(function () { obs.disconnect(); }, 1500);
+              });
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
+    <!-- Google API & Picker Client Scripts -->
+    <script src="https://apis.google.com/js/api.js" async defer></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+  </head>
+  <body class="bg-[#F7F5FA] dark:bg-[#140F1F] text-[#292333] dark:text-[#F7F5FA] antialiased font-sans selection:bg-[#62339A] selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

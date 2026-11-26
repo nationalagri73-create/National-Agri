@@ -1,0 +1,6 @@
+{
+  "name": "Catering Egypt - National Logistics ERP",
+  "description": "منصة تشغيل وإدارة ولوجستيات الإعاشة والمطابخ المركزية للشركة الوطنية اللوجستية - CATERING EGYPT",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

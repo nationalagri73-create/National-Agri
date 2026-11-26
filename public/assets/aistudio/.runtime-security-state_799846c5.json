@@ -1,0 +1,378 @@
+{
+  "ownerPin": null,
+  "revokedSubjects": {},
+  "designatedRoles": {
+    "ahmed.adly@basit-catering.local": "basit_admin",
+    "ahmed.wahid@basit-catering.local": "basit_admin"
+  },
+  "roleMatrix": {
+    "super_admin": [
+      "platform:approve_entities",
+      "platform:manage_users",
+      "platform:manage_roles",
+      "platform:manage_offers_cms",
+      "platform:view_audit_logs",
+      "platform:manage_orders",
+      "entity:manage_profile",
+      "entity:invite_employees",
+      "entity:assign_member_permissions",
+      "entity:place_orders",
+      "entity:view_orders",
+      "kitchen:manage_menu",
+      "kitchen:manage_orders",
+      "kitchen:manage_staff",
+      "finance:view_reports",
+      "finance:manage_settlements",
+      "customer:browse_and_order"
+    ],
+    "platform_admin": [
+      "platform:approve_entities",
+      "platform:manage_users",
+      "platform:manage_offers_cms",
+      "platform:view_audit_logs",
+      "platform:manage_orders",
+      "entity:view_orders",
+      "kitchen:manage_orders",
+      "finance:view_reports",
+      "customer:browse_and_order"
+    ],
+    "client_owner": [
+      "entity:manage_profile",
+      "entity:invite_employees",
+      "entity:assign_member_permissions",
+      "entity:place_orders",
+      "entity:view_orders",
+      "finance:view_reports",
+      "customer:browse_and_order"
+    ],
+    "client_manager": [
+      "entity:invite_employees",
+      "entity:assign_member_permissions",
+      "entity:place_orders",
+      "entity:view_orders",
+      "customer:browse_and_order"
+    ],
+    "client_employee": [
+      "entity:place_orders",
+      "entity:view_orders",
+      "customer:browse_and_order"
+    ],
+    "kitchen_owner": [
+      "kitchen:manage_menu",
+      "kitchen:manage_orders",
+      "kitchen:manage_staff",
+      "entity:manage_profile",
+      "entity:invite_employees",
+      "entity:assign_member_permissions",
+      "finance:view_reports",
+      "customer:browse_and_order"
+    ],
+    "kitchen_manager": [
+      "kitchen:manage_menu",
+      "kitchen:manage_orders",
+      "kitchen:manage_staff",
+      "entity:invite_employees",
+      "entity:assign_member_permissions",
+      "customer:browse_and_order"
+    ],
+    "kitchen_staff": [
+      "kitchen:manage_orders",
+      "customer:browse_and_order"
+    ],
+    "finance_manager": [
+      "finance:view_reports",
+      "finance:manage_settlements"
+    ],
+    "customer": [
+      "customer:browse_and_order"
+    ]
+  },
+  "accountsByEmail": {
+    "hamzaelhelaly08@gmail.com": {
+      "uid": "server_owner_hamza",
+      "email": "hamzaelhelaly08@gmail.com",
+      "username": "hamza",
+      "usernameAliases": [
+        "@hamza",
+        "hamza.elhelaly"
+      ],
+      "canApproveHabe": true,
+      "phone": "",
+      "fullName": "حمزة الهلالي",
+      "passwordSalt": "ac3888eaba9b24a93873855c9c6b3b60",
+      "passwordHash": "4707c5244650277d65856bbc553741785c267ce7c4144357266780c34a4231555b87e74406baf1b229209931e1d3ebe213c70d09fb7abae323b6e655caa78b25",
+      "canonicalRole": "super_admin",
+      "requestedKind": "client_company",
+      "approvalStatus": "approved",
+      "tenantId": "",
+      "customPermissions": [],
+      "businessName": "BASIT | H-A-B-E Governance",
+      "commercialRegRef": "GOV-EXEC",
+      "city": "القاهرة",
+      "countryCode": "EG",
+      "reviewNote": "حساب إدارة تنفيذية معتمد",
+      "createdAt": "2026-11-23T13:32:22.035Z",
+      "updatedAt": "2026-11-23T13:32:22.035Z"
+    },
+    "ahmed.adly@basit-catering.local": {
+      "uid": "exec_ahmed_adly",
+      "email": "ahmed.adly@basit-catering.local",
+      "username": "ahmed.adly",
+      "usernameAliases": [
+        "@ahmed.adly",
+        "ahmed_adly",
+        "hb-024"
+      ],
+      "employeeCode": "HB-024",
+      "canApproveHabe": true,
+      "phone": "+201274799290",
+      "fullName": "أحمد عدلي فؤاد محمد",
+      "passwordSalt": "59f1512170aad33573fabd2c012e96c9",
+      "passwordHash": "26d2f61c837ba0ac966c29b0ea8dad15b19fc29a0c7aea2f788c9fd186a0d68482ac2d757920a4080d7051487498aa50fde98a0e3acf1acfbca7837b5b38d970",
+      "canonicalRole": "client_owner",
+      "requestedKind": "client_company",
+      "approvalStatus": "approved",
+      "tenantId": "tenant_client_habe",
+      "customPermissions": [],
+      "businessName": "BASIT | H-A-B-E Governance",
+      "commercialRegRef": "HB-024",
+      "city": "القاهرة",
+      "countryCode": "EG",
+      "reviewNote": "حساب إدارة تنفيذية معتمد",
+      "createdAt": "2026-11-23T13:32:22.035Z",
+      "updatedAt": "2026-11-23T13:32:22.035Z"
+    },
+    "ahmed.wahid@basit-catering.local": {
+      "uid": "exec_ahmed_wahid",
+      "email": "ahmed.wahid@basit-catering.local",
+      "username": "ahmed.wahid",
+      "usernameAliases": [
+        "@ahmed.wahid",
+        "ahmed.wahed",
+        "@ahmed.wahed",
+        "ahmed_wahid",
+        "hb-025"
+      ],
+      "employeeCode": "HB-025",
+      "canApproveHabe": true,
+      "phone": "+201103611414",
+      "fullName": "أحمد وحيد محمود",
+      "passwordSalt": "7c56b27acfb9ee179e4d0b8c19107200",
+      "passwordHash": "46e33102ee3b2c68086180725d6181f390520cd67a2b13980df7fb2a01a9e11f833548801e0cfad1d0b4ae9a8baa8710401fb45916851691ff9092eba6362a3e",
+      "canonicalRole": "client_owner",
+      "requestedKind": "client_company",
+      "approvalStatus": "approved",
+      "tenantId": "tenant_client_habe",
+      "customPermissions": [],
+      "businessName": "BASIT | H-A-B-E Governance",
+      "commercialRegRef": "HB-025",
+      "city": "القاهرة",
+      "countryCode": "EG",
+      "reviewNote": "حساب إدارة تنفيذية معتمد",
+      "createdAt": "2026-11-23T13:32:22.035Z",
+      "updatedAt": "2026-11-23T13:32:22.035Z"
+    }
+  },
+  "tenantsById": {
+    "tenant_kitchen_alain": {
+      "tenantId": "tenant_kitchen_alain",
+      "name": "مطبخ ومركز العين — مدينة بدر",
+      "kind": "central_kitchen",
+      "ownerUid": "seed_kitchen_alain",
+      "ownerEmail": "kitchen.alain@basit-platform.local",
+      "commercialRegRef": "HACCP-EG-2091",
+      "city": "مدينة بدر",
+      "countryCode": "EG",
+      "contractedKitchenIds": [],
+      "status": "active",
+      "createdAt": "2026-01-12T08:00:00.000Z",
+      "updatedAt": "2026-01-12T08:00:00.000Z"
+    },
+    "tenant_kitchen_hanger": {
+      "tenantId": "tenant_kitchen_hanger",
+      "name": "مطبخ هنجر ستيشن المركزي — أرض المعارض بمدينة نصر",
+      "kind": "central_kitchen",
+      "ownerUid": "seed_kitchen_hanger",
+      "ownerEmail": "kitchen.hanger@basit-platform.local",
+      "commercialRegRef": "HACCP-EG-1042",
+      "city": "أرض المعارض بمدينة نصر",
+      "countryCode": "EG",
+      "contractedKitchenIds": [],
+      "status": "active",
+      "createdAt": "2026-01-10T08:00:00.000Z",
+      "updatedAt": "2026-01-10T08:00:00.000Z"
+    },
+    "tenant_kitchen_bait_al_eila": {
+      "tenantId": "tenant_kitchen_bait_al_eila",
+      "name": "مطبخ بيت العيلة المركزي",
+      "kind": "central_kitchen",
+      "ownerUid": "seed_kitchen_bait_al_eila",
+      "ownerEmail": "kitchen.baitaleila@basit-platform.local",
+      "commercialRegRef": "HACCP-EG-3105",
+      "city": "القاهرة الكبرى",
+      "countryCode": "EG",
+      "contractedKitchenIds": [],
+      "status": "active",
+      "createdAt": "2026-01-15T08:00:00.000Z",
+      "updatedAt": "2026-01-15T08:00:00.000Z"
+    },
+    "tenant_client_habe": {
+      "tenantId": "tenant_client_habe",
+      "name": "شركة ها-بي المصرية (H.A.B.E)",
+      "kind": "client_company",
+      "ownerUid": "seed_client_habe",
+      "ownerEmail": "ops@habe-egypt.local",
+      "commercialRegRef": "CONTRACT-HABE-2026",
+      "city": "العاشر من رمضان / بدر",
+      "countryCode": "EG",
+      "contractedKitchenIds": [
+        "tenant_kitchen_alain",
+        "tenant_kitchen_hanger"
+      ],
+      "status": "active",
+      "createdAt": "2026-01-18T08:00:00.000Z",
+      "updatedAt": "2026-01-18T08:00:00.000Z"
+    }
+  },
+  "invitationsById": {},
+  "tenantOrdersById": {},
+  "habeOrdersById": {},
+  "habeCustomEmployees": [],
+  "ledgerEntries": [],
+  "auditLogs": [
+    {
+      "actorUid": "cDoz9bMLW8UQDQTnpFXvZJlG14w1",
+      "actorEmail": "hamzaelhelaly08@gmail.com",
+      "actorRole": "super_admin",
+      "action": "تسجيل دخول موثق عبر Google",
+      "targetType": "session",
+      "targetId": "cDoz9bMLW8UQDQTnpFXvZJlG14w1",
+      "severity": "info",
+      "details": "Google OAuth session issued for super_admin",
+      "logId": "AUD-mws2uzoy-b93c6b",
+      "timestamp": "2026-11-22T16:55:02.962Z"
+    }
+  ],
+  "ownerFinance": {
+    "accounts": {
+      "bank": 0,
+      "e_wallet": 0,
+      "treasury": 0
+    },
+    "entries": [],
+    "receivables": [],
+    "payables": [],
+    "bolRows": [
+      {
+        "rowId": "BOL-INIT-1",
+        "docType": "owners_balances",
+        "docNumber": "BL-OWN-1001",
+        "partyName": "رأس مال التشغيل — المالك",
+        "statement": "تقرير أرصدة الملاك والسيولة الافتتاحية",
+        "originLabel": "تمويل مالك المنصة التشغيلي",
+        "debitEGP": 0,
+        "creditEGP": 0,
+        "remainingEGP": 0,
+        "urgency": "normal",
+        "entryDate": "2026-11-01",
+        "updatedAt": "2026-11-01T08:00:00.000Z"
+      },
+      {
+        "rowId": "BOL-INIT-2",
+        "docType": "rents",
+        "docNumber": "BL-RNT-2001",
+        "partyName": "مطبخ مدينة بدر المركزي",
+        "statement": "كشف إيجار ومرافق المطبخ المركزي",
+        "originLabel": "مصروف تشغيلي ثابت — إيجار مطبخ",
+        "debitEGP": 0,
+        "creditEGP": 0,
+        "remainingEGP": 0,
+        "urgency": "urgent",
+        "entryDate": "2026-11-01",
+        "updatedAt": "2026-11-01T08:00:00.000Z"
+      }
+    ],
+    "inventoryItems": [
+      {
+        "itemId": "INV-101",
+        "sku": "RAW-BEEF-01",
+        "nameAr": "لحم بقري طازج للتشغيل",
+        "unitAr": "كجم",
+        "quantityOnHand": 120,
+        "avgUnitCostEGP": 360,
+        "minStockAlert": 30,
+        "updatedAt": "2026-11-01T08:00:00.000Z"
+      },
+      {
+        "itemId": "INV-102",
+        "sku": "RAW-RICE-02",
+        "nameAr": "أرز بسمتي ذهبي درجة أولى",
+        "unitAr": "كجم",
+        "quantityOnHand": 250,
+        "avgUnitCostEGP": 78,
+        "minStockAlert": 50,
+        "updatedAt": "2026-11-01T08:00:00.000Z"
+      },
+      {
+        "itemId": "INV-103",
+        "sku": "PKG-THERM-03",
+        "nameAr": "عبوات ميكرويف حرارية محكمة الغلق",
+        "unitAr": "كرتونة",
+        "quantityOnHand": 45,
+        "avgUnitCostEGP": 420,
+        "minStockAlert": 15,
+        "updatedAt": "2026-11-01T08:00:00.000Z"
+      }
+    ],
+    "purchaseInvoices": [],
+    "purchaseReturns": [],
+    "partyPayments": [],
+    "lockedTreasury": {
+      "balanceEGP": 0,
+      "deductionRatePct": 10,
+      "transfers": []
+    },
+    "totalFundsAuthMethod": "fingerprint",
+    "financeManagers": [],
+    "managerSubTreasuryEntries": [],
+    "archivedManagerRecords": [],
+    "aiManagerAuditReports": [],
+    "ownerAuditAlerts": [],
+    "lastManagerAuditAt": null,
+    "auditLogs": [],
+    "webauthnCredentials": [],
+    "ingestedOrderRefs": []
+  },
+  "basetCards": {
+    "member:qCF-7JEhTiBxOQ3syxzS9w": {
+      "cardId": "BC-9BDB2606",
+      "subjectKey": "member:qCF-7JEhTiBxOQ3syxzS9w",
+      "cardNumber": "BASET-FAM-3788-5892",
+      "holderName": "أحمد محمود حسن",
+      "phone": "01012345678",
+      "entityName": "شركة السويدي إليكتريك",
+      "employeeCode": "EMP-9021",
+      "tier": "family_benefits",
+      "discountPct": 10,
+      "status": "inactive",
+      "qrPayload": "BASET:FAM:BASET-FAM-3788-5892:10PCT:VERIFIED",
+      "activatedAt": "2026-11-25T19:40:41.609Z",
+      "updatedAt": "2026-11-25T19:40:41.645Z"
+    }
+  },
+  "basetOfferRedemptions": [
+    {
+      "redemptionId": "RED-MWWJ3KEM-7FE9",
+      "subjectKey": "member:qCF-7JEhTiBxOQ3syxzS9w",
+      "cardNumber": "BASET-FAM-3788-5892",
+      "destination": "food_meal_benefits",
+      "offerId": "zadi_ramadan_dates",
+      "offerTitle": "تمور رمضان — زادي الوادي والفرافرة",
+      "partnerName": "ZADI | CATERING MISR",
+      "discountAppliedPct": 10,
+      "notes": "",
+      "status": "confirmed",
+      "createdAt": "2026-11-25T19:40:41.614Z"
+    }
+  ]
+}

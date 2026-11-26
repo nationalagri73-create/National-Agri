@@ -1,0 +1,6 @@
+{
+  "name": "FAYD | BASIT Mobile",
+  "description": "منظومة فيض وباسط — تطبيق موبايل متطور للتجارة المعزولة، التوصيل الذكي، فرص الانتفاع، والحوكمة الأمنية (المرحلة الثانية).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
