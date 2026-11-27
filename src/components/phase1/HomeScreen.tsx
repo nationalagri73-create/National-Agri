@@ -3,6 +3,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  ExternalLink,
   Lock,
   MapPin,
   Star,
@@ -15,6 +16,7 @@ import {
 } from '../../data/phase1Data';
 import { useI18n } from '../../i18n/translations';
 import { BasitPermissions } from '../../lib/rbac';
+import { InstallPwaButton } from './InstallPwaButton';
 import { getSectorIcon } from './SharedUI';
 
 export const HomeScreen: React.FC<{
@@ -185,6 +187,49 @@ export const HomeScreen: React.FC<{
 
   return (
     <div className="space-y-6">
+      {/* Direct Mobile Install Button & Ha-Be Partner Card */}
+      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+        <InstallPwaButton className="w-full md:w-auto" />
+      </div>
+
+      <section className="rounded-3xl p-4 bg-gradient-to-r from-[#240046] via-[#4B148C] to-[#1A052E] text-white border border-[#D4AF37]/60 shadow-md space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-[#FFE875] animate-pulse" />
+            <span className="text-[11px] font-black tracking-wider text-[#FFE875]">
+              {t('شريك متعاقد معتمد', 'Certified Partner Enterprise')}
+            </span>
+          </div>
+          <span className="px-2.5 py-0.5 rounded-lg bg-[#FACC15] text-[#1A052E] text-[10px] font-black">
+            {t('شركة ها-بي', 'Ha-Be Enterprise')}
+          </span>
+        </div>
+
+        <div>
+          <h3 className="text-sm font-black text-white">
+            {t('تطبيق شركة ها-بي للكيماويات والتوريد الفندقي والغذائي', 'Ha-Be Chemicals & Catering App Portal')}
+          </h3>
+          <p className="text-xs text-[#FFFDF7]/85 leading-relaxed mt-1">
+            {t(
+              'تم ربط تطبيق شركة ها-بي المتعاقدة معنا رسمياً داخل المنصة لتوفير خدمات الإعاشة وإدارة الوجبات.',
+              'Ha-Be contracted company application is officially linked inside BASIT for catering & meal operations.',
+            )}
+          </p>
+        </div>
+
+        <div className="pt-1">
+          <a
+            href="https://catering-egypt-nov-25-2026-2-31-29-am-1-avetvzchc-basit-cb8e.vercel.app/habe?install=1"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="w-full min-h-[46px] px-4 rounded-xl bg-gradient-to-r from-[#FACC15] via-[#EAB308] to-[#9A6B16] text-[#1A052E] font-black text-xs inline-flex items-center justify-center gap-2 shadow-md hover:brightness-110 cursor-pointer"
+          >
+            <span>{t('فتح بوابة وتطبيق شركة ها-بي المتعاقدة', 'Open Ha-Be Partner Portal & App')}</span>
+            <ExternalLink className="w-4 h-4 text-[#1A052E]" />
+          </a>
+        </div>
+      </section>
+
       {/* 1. Primary Hero Service Cards (Strictly Contained 2-Col Mobile Grid) */}
       <section className="grid grid-cols-2 gap-3">
         {topTwoSectors.map((sector) => {
