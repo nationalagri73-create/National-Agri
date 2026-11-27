@@ -156,7 +156,7 @@ export const DeliveryTab: React.FC<DeliveryTabProps> = ({
       <section className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-[#4F2487]/10 text-[#4F2487] flex items-center justify-center shrink-0">
+            <div className="w-11 h-11 rounded-2xl bg-[#3B123F]/10 text-[#3B123F] flex items-center justify-center shrink-0">
               <Truck className="w-5 h-5" />
             </div>
             <div>
@@ -244,7 +244,7 @@ export const DeliveryTab: React.FC<DeliveryTabProps> = ({
               <button
                 type="button"
                 onClick={onRequireAuth}
-                className="mt-3 min-h-[44px] px-5 rounded-xl bg-[#4F2487] text-white text-xs font-semibold cursor-pointer"
+                className="mt-3 min-h-[44px] px-5 rounded-xl bg-[#3B123F] text-white text-xs font-semibold cursor-pointer"
               >
                 تسجيل الدخول عبر Google
               </button>
@@ -267,7 +267,7 @@ export const DeliveryTab: React.FC<DeliveryTabProps> = ({
                           {del.deliveryId} · المستأجر: {del.tenantId}
                         </div>
                         <div className="mt-1 flex items-center gap-1.5 text-sm font-bold text-slate-900">
-                          <MapPin className="w-4 h-4 text-[#4F2487] shrink-0" />
+                          <MapPin className="w-4 h-4 text-[#3B123F] shrink-0" />
                           <span>
                             {del.pickupLocation} ← {del.dropoffLocation}
                           </span>
@@ -318,7 +318,7 @@ export const DeliveryTab: React.FC<DeliveryTabProps> = ({
                         <button
                           type="button"
                           onClick={() => handleAdvanceStep(del.deliveryId, step.next)}
-                          className="min-h-[44px] px-4 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#4F2487] text-white text-xs font-semibold hover:bg-[#3f1c6d] transition-colors cursor-pointer whitespace-nowrap"
+                          className="min-h-[44px] px-4 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#3B123F] text-white text-xs font-semibold hover:bg-[#501C5A] transition-colors cursor-pointer whitespace-nowrap"
                         >
                           <CheckCircle2 className="w-4 h-4" />
                           {step.label}
@@ -335,7 +335,7 @@ export const DeliveryTab: React.FC<DeliveryTabProps> = ({
         {/* Merchant Create Delivery Dispatch Form */}
         <section className="lg:col-span-5 bg-white border border-slate-200/90 rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-3">
-            <Package className="w-5 h-5 text-[#4F2487]" />
+            <Package className="w-5 h-5 text-[#3B123F]" />
             <h3 className="text-sm font-bold text-slate-900">
               إصدار طلب توصيل جديد (للتجار والمصانع)
             </h3>
@@ -443,7 +443,7 @@ export const DeliveryTab: React.FC<DeliveryTabProps> = ({
             <button
               type="submit"
               disabled={submittingDispatch}
-              className="w-full min-h-[48px] rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#4F2487] disabled:opacity-50 transition-colors cursor-pointer"
+              className="w-full min-h-[48px] rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#3B123F] disabled:opacity-50 transition-colors cursor-pointer"
             >
               {submittingDispatch ? 'جاري الإصدار...' : 'إصدار طلب توصيل'}
             </button>

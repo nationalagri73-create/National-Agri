@@ -1,9 +1,17 @@
 export type CountryCode = 'EG' | 'AE' | 'QA' | 'OM' | 'GB';
 
-export type UserRole =
+export type CanonicalBasitRole =
+  | 'platform_owner'
+  | 'system_admin'
+  | 'factory_manager'
+  | 'kitchen_manager'
+  | 'supplier'
+  | 'employee'
+  | 'client';
+
+export type LegacyRole =
   | 'visitor'
   | 'customer'
-  | 'employee'
   | 'entity_admin'
   | 'merchant_owner'
   | 'merchant_staff'
@@ -16,24 +24,81 @@ export type UserRole =
   | 'central_admin'
   | 'central_super_admin';
 
+export type UserRole = CanonicalBasitRole | LegacyRole;
+
+export const BASIT_ROLE_LABELS: Record<
+  CanonicalBasitRole,
+  { ar: string; en: string }
+> = {
+  platform_owner: { ar: 'مالك المنصة', en: 'Platform Owner' },
+  system_admin: { ar: 'مدير النظام', en: 'System Admin' },
+  factory_manager: { ar: 'مدير المصنع', en: 'Factory Manager' },
+  kitchen_manager: { ar: 'مدير المطبخ المركزي', en: 'Central Kitchen Manager' },
+  supplier: { ar: 'مورّد معتمد', en: 'Approved Supplier' },
+  employee: { ar: 'موظف مصنع / شركة', en: 'Employee' },
+  client: { ar: 'عميل أفراد / أعمال', en: 'Client' },
+};
+
+export function normalizeRoleLabel(
+  role: UserRole | undefined,
+  isEn: boolean,
+): string {
+  if (!role) return isEn ? 'Visitor' : 'زائر';
+  if (role in BASIT_ROLE_LABELS) {
+    const entry = BASIT_ROLE_LABELS[role as CanonicalBasitRole];
+    return isEn ? entry.en : entry.ar;
+  }
+  const map: Record<LegacyRole, { ar: string; en: string }> = {
+    visitor: { ar: 'زائر', en: 'Visitor' },
+    customer: { ar: 'عميل أفراد / أعمال', en: 'Client' },
+    entity_admin: { ar: 'مدير منشأة', en: 'Entity Admin' },
+    merchant_owner: { ar: 'تاجر / مطبخ مركزي', en: 'Merchant / Kitchen Owner' },
+    merchant_staff: { ar: 'موظف متجر', en: 'Store Staff' },
+    kitchen_partner: { ar: 'شريك مطبخ مركزي', en: 'Kitchen Partner' },
+    entertainment_partner: { ar: 'شريك ترفيه ومزايا', en: 'Benefits Partner' },
+    delivery_client: { ar: 'عميل توصيل شركات', en: 'Logistics Client' },
+    courier: { ar: 'مندوب توصيل', en: 'Courier' },
+    opportunity_partner: { ar: 'شريك فرص انتفاع', en: 'Opportunity Partner' },
+    finance_admin: { ar: 'مدير مالي', en: 'Finance Admin' },
+    central_admin: { ar: 'مشرف مركزي', en: 'Central Admin' },
+    central_super_admin: { ar: 'مدير النظام المركزي', en: 'System Admin' },
+  };
+  const m = map[role as LegacyRole];
+  return m ? (isEn ? m.en : m.ar) : role;
+}
+
 export type EntityType =
   | 'restaurant'
   | 'store'
   | 'central_kitchen'
   | 'company_factory'
+  | 'delivery_client'
+  | 'supplier';
+
+export type TenantKind =
+  | 'factory'
+  | 'central_kitchen'
+  | 'supplier'
+  | 'company'
+  | 'restaurant'
+  | 'store'
   | 'delivery_client';
 
 export type OnboardingTargetRole =
   | 'merchant_owner'
   | 'delivery_client'
   | 'courier'
-  | 'opportunity_partner';
+  | 'opportunity_partner'
+  | 'factory_manager'
+  | 'kitchen_manager'
+  | 'supplier';
 
 export type OnboardingEntityType =
   | 'restaurant'
   | 'store'
   | 'central_kitchen'
   | 'company_factory'
+  | 'supplier'
   | 'courier_individual'
   | 'project_owner'
   | 'site_owner';
@@ -73,7 +138,12 @@ export type PaymentProviderId =
   | 'instapay'
   | 'cash_on_delivery';
 
-export type VipOrderChannel = 'camel_liver_vip' | 'cart_direct' | 'al_ain_offer';
+export type VipOrderChannel =
+  | 'camel_liver_vip'
+  | 'cart_direct'
+  | 'al_ain_offer'
+  | 'factory_portal';
+
 export type VipOrderStatus =
   | 'pending_owner'
   | 'approved'
@@ -99,6 +169,24 @@ export type LogisticsServiceKey =
   | 'central_kitchens_setup'
   | 'institutional_events_catering'
   | 'supply_distribution_logistics';
+
+export type BusinessSectorKey =
+  | 'factories'
+  | 'companies'
+  | 'hospitals'
+  | 'schools'
+  | 'clubs'
+  | 'parties'
+  | 'conferences';
+
+export type BasitSectorKey =
+  | 'marketplace'
+  | 'business'
+  | 'card'
+  | 'healthy'
+  | 'factory'
+  | 'logistics'
+  | 'general';
 
 export interface UserProfile {
   uid: string;
@@ -145,7 +233,9 @@ export interface TenantWorkspace {
   tenantId: string;
   ownerUid: string;
   name: string;
+  nameEn?: string;
   entityType: EntityType;
+  tenantKind?: TenantKind;
   countryCode: CountryCode;
   city: string;
   commercialRegRef: string;
@@ -153,7 +243,22 @@ export interface TenantWorkspace {
   customCommissionPct: number;
   deliveryEnabled: boolean;
   status: 'active' | 'suspended';
-  contractStatus?: 'contracted' | 'in_contracting' | 'prospective' | 'unlaunched_sector';
+  contractStatus?:
+    | 'contracted'
+    | 'in_contracting'
+    | 'prospective'
+    | 'unlaunched_sector';
+  contractedKitchenIdsCsv?: string;
+  logoUrl?: string;
+  primaryColor?: string;
+  accentColor?: string;
+  specialtiesAr?: string;
+  specialtiesEn?: string;
+  capacityMealsPerDay?: number;
+  serviceAreasCsv?: string;
+  averageRating?: number;
+  ratingCount?: number;
+  cateringScheduleText?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -161,9 +266,20 @@ export interface TenantWorkspace {
 export interface PublicStorefront {
   tenantId: string;
   name: string;
+  nameEn?: string;
   entityType: EntityType;
+  tenantKind?: TenantKind;
   countryCode: CountryCode;
   city: string;
+  primaryColor?: string;
+  accentColor?: string;
+  logoUrl?: string;
+  specialtiesAr?: string;
+  specialtiesEn?: string;
+  capacityMealsPerDay?: number;
+  serviceAreasCsv?: string;
+  averageRating?: number;
+  ratingCount?: number;
   isActive: boolean;
   updatedAt?: unknown;
 }
@@ -196,6 +312,135 @@ export interface CommercialOrder {
   needsDelivery: boolean;
   dropoffAddress: string;
   status: OrderStatus;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface MarketplaceRfq {
+  rfqId: string;
+  requesterUid: string;
+  requesterOrgName: string;
+  phone: string;
+  targetTenantId: string;
+  targetMerchantOwnerUid: string;
+  targetName: string;
+  dailyQty: number;
+  frequency: 'daily' | 'weekly' | 'monthly' | 'one_time';
+  city: string;
+  details: string;
+  quotedPriceEGP: number;
+  merchantNote: string;
+  status: 'open' | 'quoted' | 'accepted' | 'declined';
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface MarketplaceReview {
+  reviewId: string;
+  tenantId: string;
+  authorUid: string;
+  authorName: string;
+  rating: number;
+  comment: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface BasitCard {
+  cardId: string;
+  ownerUid: string;
+  holderName: string;
+  employeeCode: string;
+  tenantId: string;
+  factoryName: string;
+  cardNumberMasked: string;
+  monthlyQuotaEGP: number;
+  usedAmountEGP: number;
+  validFrom: string;
+  validTo: string;
+  status: 'active' | 'frozen' | 'expired';
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface BasitCardRedemption {
+  redemptionId: string;
+  cardId: string;
+  ownerUid: string;
+  tenantId: string;
+  vendorName: string;
+  offerTitle: string;
+  amountEGP: number;
+  discountSavedEGP: number;
+  createdAt?: unknown;
+}
+
+export interface HealthyPlan {
+  planId: string;
+  targetSegment: 'individual' | 'gym' | 'sports_center';
+  titleAr: string;
+  titleEn: string;
+  descriptionAr: string;
+  descriptionEn: string;
+  caloriesPerDay: number;
+  proteinGrams: number;
+  carbsGrams: number;
+  fatsGrams: number;
+  mealsPerDay: number;
+  durationDays: number;
+  priceEGP: number;
+  isActive: boolean;
+  updatedAt?: unknown;
+}
+
+export interface HealthySubscription {
+  subId: string;
+  subscriberUid: string;
+  subscriberName: string;
+  phone: string;
+  planId: string;
+  planTitle: string;
+  targetSegment: 'individual' | 'gym' | 'sports_center';
+  orgOrGymName: string;
+  startDate: string;
+  deliveryAddress: string;
+  totalPriceEGP: number;
+  status: 'active' | 'paused' | 'completed';
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface FactoryEmployee {
+  empId: string;
+  tenantId: string;
+  employeeCode: string;
+  nameAr: string;
+  nameEn: string;
+  departmentAr: string;
+  jobTitle: string;
+  shift: string;
+  monthlyCardLimitEGP: number;
+  isActive: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface FactoryComplaint {
+  complaintId: string;
+  tenantId: string;
+  authorUid: string;
+  authorName: string;
+  employeeCode: string;
+  category:
+    | 'meal_quality'
+    | 'delivery_delay'
+    | 'card_voucher'
+    | 'kitchen_hygiene'
+    | 'other';
+  subject: string;
+  details: string;
+  status: 'open' | 'in_progress' | 'resolved';
+  resolutionNote: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -356,6 +601,7 @@ export interface VipDirectOrder {
   totalEGP: number;
   paymentMethod: PaymentProviderId;
   notes: string;
+  tenantId?: string;
   status: VipOrderStatus;
   ownerReply?: string;
   createdAt?: unknown;
@@ -484,7 +730,10 @@ export interface KaffarahOrder {
   totalAmountEGP: number;
   shariaReferenceUsed: string;
   distributionNotes: string;
-  executionStatus: 'pending_verification' | 'awaiting_execution' | 'executed_verified';
+  executionStatus:
+    | 'pending_verification'
+    | 'awaiting_execution'
+    | 'executed_verified';
   executionProofUrl: string;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -494,6 +743,7 @@ export interface LogisticsServiceInquiry {
   inquiryId: string;
   requesterUid: string;
   serviceKey: LogisticsServiceKey;
+  businessSector?: BusinessSectorKey;
   organizationName: string;
   contactName: string;
   phone: string;
@@ -517,6 +767,8 @@ export interface OwnerFinancialAccount {
 export interface OwnerFinancialEntry {
   entryId: string;
   direction: 'inflow' | 'outflow';
+  entryKind?: 'revenue' | 'expense' | 'receivable' | 'payable' | 'debt';
+  sector?: BasitSectorKey;
   sourceOrBeneficiary: string;
   purpose: string;
   expenseCategory:
@@ -534,8 +786,26 @@ export interface OwnerFinancialEntry {
   netEGP: number;
   entryDate: string;
   orderRef: string;
+  confirmedByOwner?: boolean;
+  voiceInputUsed?: boolean;
+  voiceTranscript?: string;
   createdByEmail: string;
   createdAt?: unknown;
+}
+
+export interface OwnerInvoice {
+  invoiceId: string;
+  invoiceNumber: string;
+  sector: Exclude<BasitSectorKey, 'general'>;
+  clientOrEntityName: string;
+  description: string;
+  amountEGP: number;
+  dueDate: string;
+  status: 'draft_pending_review' | 'issued' | 'paid' | 'overdue';
+  confirmedByOwner?: boolean;
+  createdByEmail: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 }
 
 export interface OwnerClientReceivable {
@@ -560,6 +830,41 @@ export interface OwnerSupplierPayable {
   status: 'scheduled' | 'partial' | 'paid';
   createdAt?: unknown;
   updatedAt?: unknown;
+}
+
+export interface OwnerFinancialAuditLog {
+  logId: string;
+  actorEmail: string;
+  actionAr: string;
+  category:
+    | 'inflow'
+    | 'outflow'
+    | 'balance'
+    | 'receivable'
+    | 'payable'
+    | 'invoice'
+    | 'voice_confirmed'
+    | 'security_2fa'
+    | 'ai_investor'
+    | 'pdf_export';
+  amountEGP: number;
+  details: string;
+  createdAt?: unknown;
+}
+
+export interface VoiceDraftTransaction {
+  direction: 'inflow' | 'outflow';
+  entryKind: 'revenue' | 'expense' | 'receivable' | 'payable' | 'debt';
+  sector: BasitSectorKey;
+  sourceOrBeneficiary: string;
+  purpose: string;
+  expenseCategory: OwnerFinancialEntry['expenseCategory'];
+  channel: OwnerFinancialAccount['accountId'];
+  grossEGP: number;
+  commissionPct: number;
+  entryDate: string;
+  transcriptNormalized: string;
+  confidenceNote: string;
 }
 
 export const ID_PATTERN = /^[a-zA-Z0-9_-]+$/;

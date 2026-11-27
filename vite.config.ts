@@ -12,15 +12,15 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
+        includeAssets: ['apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png', 'pwa-maskable-512x512.png'],
         manifest: {
           id: '/',
-          name: 'BASIT | باسط — المنظومة الوطنية اللوجستية وسوق فيض',
+          name: 'BASIT | باسط — المنصة الوطنية اللوجستية للأغذية والتوريد',
           short_name: 'BASIT باسط',
           description:
-            'تطبيق باسط الوطني اللوجستي ومنظومة فيض للإعاشة والتوصيل، نقطة موظفي ها-بي، المزايا الترفيهية، الخير وكفارة اليمين، وعقود الانتفاع.',
-          theme_color: '#4F2487',
-          background_color: '#F8F7FC',
+            'منصة باسط التابعة للشركة الوطنية اللوجستية لإدارة خدمات الأغذية والتوريد والتشغيل.',
+          theme_color: '#3B123F',
+          background_color: '#FFFFFF',
           display: 'standalone',
           orientation: 'portrait',
           dir: 'rtl',

@@ -61,7 +61,7 @@ export class ErrorBoundary extends Component<Props, State> {
                 this.setState({ hasError: false, errorMessage: '' });
                 window.location.reload();
               }}
-              className="mt-5 w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#4F2487] text-white text-sm font-semibold hover:bg-[#3f1c6d] transition-colors cursor-pointer"
+              className="mt-5 w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#3B123F] text-white text-sm font-semibold hover:bg-[#501C5A] transition-colors cursor-pointer"
             >
               <RotateCcw className="w-4 h-4" />
               إعادة تحميل التطبيق

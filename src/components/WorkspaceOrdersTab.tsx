@@ -158,7 +158,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
   if (!uid) {
     return (
       <div className="bg-white border border-slate-200/90 rounded-2xl p-8 text-center">
-        <ClipboardList className="w-8 h-8 text-[#4F2487] mx-auto" />
+        <ClipboardList className="w-8 h-8 text-[#3B123F] mx-auto" />
         <h2 className="mt-3 text-base font-bold text-slate-900">
           الطلبات ومساحة عمل التاجر المعزولة
         </h2>
@@ -168,7 +168,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
         <button
           type="button"
           onClick={onRequireAuth}
-          className="mt-4 min-h-[44px] px-5 rounded-xl bg-[#4F2487] text-white text-xs font-semibold cursor-pointer"
+          className="mt-4 min-h-[44px] px-5 rounded-xl bg-[#3B123F] text-white text-xs font-semibold cursor-pointer"
         >
           تسجيل الدخول عبر Google
         </button>
@@ -218,7 +218,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
                         <div className="text-sm font-bold text-slate-900">
                           {(ord.subtotalEGP + ord.deliveryFeeEGP).toLocaleString('en-US')} ج.م
                         </div>
-                        <div className="text-xs font-semibold text-[#4F2487]">
+                        <div className="text-xs font-semibold text-[#3B123F]">
                           {ORDER_STATUS_AR[ord.status] || ord.status}
                         </div>
                       </div>
@@ -261,7 +261,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
             <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                  <CreditCard className="w-4 h-4 text-[#4F2487]" />
+                  <CreditCard className="w-4 h-4 text-[#3B123F]" />
                   طلبات باسط المباشرة و Ha-Be ({vipOrders.length})
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
@@ -301,7 +301,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
                           <div className="text-sm font-bold text-slate-900">
                             {vo.totalEGP.toLocaleString('en-US')} ج.م
                           </div>
-                          <div className="text-xs font-semibold text-[#4F2487]">
+                          <div className="text-xs font-semibold text-[#3B123F]">
                             {VIP_STATUS_AR[vo.status]}
                           </div>
                         </div>
@@ -352,7 +352,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
           <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
             <div>
               <h2 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
-                <Store className="w-4 h-4 text-[#4F2487]" />
+                <Store className="w-4 h-4 text-[#3B123F]" />
                 مساحة التاجر المعزولة ({ownedTenants.length})
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
@@ -405,7 +405,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
                                 صافي التاجر: {ord.netMerchantEGP} ج.م · عمولة المنصة: {ord.platformCommissionEGP} ج.م
                               </div>
                             </div>
-                            <span className="text-xs font-semibold text-[#4F2487] shrink-0">
+                            <span className="text-xs font-semibold text-[#3B123F] shrink-0">
                               {ORDER_STATUS_AR[ord.status]}
                             </span>
                           </div>
@@ -415,7 +415,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
                               <button
                                 type="button"
                                 onClick={() => updateOrderStatus(ord.orderId, nextAction.next)}
-                                className="min-h-[40px] px-3 rounded-xl bg-[#4F2487] text-white text-xs font-semibold hover:bg-[#3f1c6d] cursor-pointer"
+                                className="min-h-[40px] px-3 rounded-xl bg-[#3B123F] text-white text-xs font-semibold hover:bg-[#501C5A] cursor-pointer"
                               >
                                 {nextAction.label}
                               </button>
@@ -494,7 +494,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
                 <button
                   type="submit"
                   disabled={savingItem}
-                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#4F2487] disabled:opacity-50 cursor-pointer"
+                  className="w-full min-h-[44px] inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#3B123F] disabled:opacity-50 cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
                   {savingItem ? 'جاري الحفظ...' : 'إضافة الصنف للكتالوج'}
@@ -509,7 +509,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
       <section className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200/90 rounded-2xl p-4 space-y-2.5">
           <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-            <Sparkles className="w-4 h-4 text-[#4F2487]" />
+            <Sparkles className="w-4 h-4 text-[#3B123F]" />
             حجوزات المزايا ({benefitBookings.length})
           </h3>
           {benefitBookings.length === 0 ? (
@@ -584,7 +584,7 @@ export const WorkspaceOrdersTab: React.FC<WorkspaceOrdersTabProps> = ({
 
         <div className="bg-white border border-slate-200/90 rounded-2xl p-4 space-y-2.5">
           <h3 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-            <Truck className="w-4 h-4 text-[#4F2487]" />
+            <Truck className="w-4 h-4 text-[#3B123F]" />
             طلبات التموين واللوجستيات ({logisticsInquiries.length})
           </h3>
           {logisticsInquiries.length === 0 ? (

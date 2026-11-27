@@ -9,10 +9,14 @@ import {
   Play,
   ShieldCheck,
   UserCheck,
+  Users,
   Wallet,
 } from 'lucide-react';
+import { useI18n } from '../i18n/translations';
 import {
+  BASIT_ROLE_LABELS,
   BenefitBooking,
+  CanonicalBasitRole,
   CharityContribution,
   CommissionRule,
   CourierProfile,
@@ -21,14 +25,14 @@ import {
   KaffarahOrder,
   LogisticsServiceInquiry,
   OnboardingApplication,
-  OwnerFinancialAccount,
-  OwnerFinancialEntry,
+  PublicStorefront,
   SecurityAuditLog,
   SubscriptionPlan,
   UserPrivateProfile,
   UserProfile,
   UsufructProposal,
   VipDirectOrder,
+  normalizeRoleLabel,
 } from '../types/fayd';
 import {
   approveOrRejectOpportunity,
@@ -36,7 +40,6 @@ import {
   decideBenefitBooking,
   decideOnboardingApplication,
   issueUsufructContractByAdmin,
-  recordOwnerFinancialEntry,
   RedTeamProbeResult,
   runLiveRedTeamProbes,
   saveCommissionRule,
@@ -44,6 +47,7 @@ import {
   updateKaffarahExecutionStatus,
   updateLogisticsInquiryStatus,
   updateUserPrivateProfile,
+  updateUserRoleAndTenantByAdmin,
   updateVipDirectOrderStatus,
   verifyCharityContribution,
 } from '../services/faydFirestore';
@@ -54,6 +58,9 @@ interface GovernanceSecurityTabProps {
   privateProfile: UserPrivateProfile | null;
   isAdmin: boolean;
   isBootAdmin: boolean;
+  isPlatformOwner: boolean;
+  allUsers: UserProfile[];
+  storefronts: PublicStorefront[];
   applications: OnboardingApplication[];
   opportunities: FaydOpportunity[];
   proposals: UsufructProposal[];
@@ -67,11 +74,20 @@ interface GovernanceSecurityTabProps {
   charityContributions: CharityContribution[];
   kaffarahOrders: KaffarahOrder[];
   logisticsInquiries: LogisticsServiceInquiry[];
-  ownerAccounts: OwnerFinancialAccount[];
-  ownerEntries: OwnerFinancialEntry[];
   onSignIn: () => void;
   onSignOut: () => void;
+  onNavigateFinance?: () => void;
 }
+
+const CANONICAL_ROLES: CanonicalBasitRole[] = [
+  'platform_owner',
+  'system_admin',
+  'factory_manager',
+  'kitchen_manager',
+  'supplier',
+  'employee',
+  'client',
+];
 
 export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
   authUser,
@@ -79,6 +95,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
   privateProfile,
   isAdmin,
   isBootAdmin,
+  isPlatformOwner,
+  allUsers,
+  storefronts,
   applications,
   opportunities,
   proposals,
@@ -92,11 +111,11 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
   charityContributions,
   kaffarahOrders,
   logisticsInquiries,
-  ownerAccounts,
-  ownerEntries,
   onSignIn,
   onSignOut,
+  onNavigateFinance,
 }) => {
+  const { isEn, t } = useI18n();
   const [phone, setPhone] = useState(privateProfile?.phone ?? '');
   const [taxId, setTaxId] = useState(privateProfile?.nationalOrTaxId ?? '');
   const [address, setAddress] = useState(privateProfile?.address ?? '');
@@ -113,22 +132,16 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
     String(commissionRule.minDeliveryFeeEGP),
   );
 
+  // Role & Tenant Assignment Drafts
+  const [roleDrafts, setRoleDrafts] = useState<
+    Record<string, { role: string; tenantId: string; status: UserProfile['status'] }>
+  >({});
+  const [savingUserUid, setSavingUserUid] = useState<string | null>(null);
+
   const [assignCourierMap, setAssignCourierMap] = useState<Record<string, string>>({});
   const [charityProofMap, setCharityProofMap] = useState<Record<string, string>>({});
   const [kaffarahProofMap, setKaffarahProofMap] = useState<Record<string, string>>({});
   const [vipReplyMap, setVipReplyMap] = useState<Record<string, string>>({});
-
-  // Owner Financial Vault state
-  const [finDirection, setFinDirection] = useState<'inflow' | 'outflow'>('inflow');
-  const [finChannel, setFinChannel] = useState<OwnerFinancialAccount['accountId']>('bank');
-  const [finSource, setFinSource] = useState('');
-  const [finPurpose, setFinPurpose] = useState('');
-  const [finCategory, setFinCategory] =
-    useState<OwnerFinancialEntry['expenseCategory']>('none');
-  const [finGross, setFinGross] = useState('1000');
-  const [finCommPct, setFinCommPct] = useState('0');
-  const [finBusy, setFinBusy] = useState(false);
-  const [finMsg, setFinMsg] = useState<string | null>(null);
 
   const [probeResults, setProbeResults] = useState<RedTeamProbeResult[] | null>(
     null,
@@ -158,9 +171,18 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
         nationalOrTaxId: taxId,
         address,
       });
-      setPiiMsg('تم حفظ البيانات الشخصية الحساسة داخل /private_profile/main المعزول.');
+      setPiiMsg(
+        t(
+          'تم حفظ البيانات الشخصية الحساسة داخل الخزينة المعزولة بنجاح.',
+          'Sensitive personal info saved to isolated private vault.',
+        ),
+      );
     } catch (err) {
-      setPiiMsg(err instanceof Error ? err.message : 'تعذر حفظ البيانات.');
+      setPiiMsg(
+        err instanceof Error
+          ? err.message
+          : t('تعذر حفظ البيانات.', 'Failed to save private profile.'),
+      );
     } finally {
       setSavingPii(false);
     }
@@ -173,10 +195,13 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
     try {
       await seedFaydPlatformData(authUser.uid, authUser.email);
       setAdminMsg(
-        'تمت تهيئة المتاجر والكتالوج والعروض والمزايا والخير والكفارة وباقات الاشتراك وقواعد العمولات في Firestore بنجاح.',
+        t(
+          'تمت تهيئة المطابخ والمصانع والكتالوج والباقات الصحية والمزايا والخير والكفارة وقواعد العمولات في Firestore بنجاح.',
+          'BASIT stores, factories, catalogs, healthy plans, benefits, charity, kaffarah, and commission rules seeded to Firestore.',
+        ),
       );
     } catch (err) {
-      setAdminMsg(err instanceof Error ? err.message : 'تعذر التهيئة.');
+      setAdminMsg(err instanceof Error ? err.message : t('تعذر التهيئة.', 'Seeding failed.'));
     } finally {
       setSeeding(false);
     }
@@ -195,48 +220,39 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
         },
         authUser.uid,
       );
-      setAdminMsg('تم تحديث قواعد العمولات المركزية بنجاح.');
+      setAdminMsg(t('تم تحديث قواعد العمولات المركزية بنجاح.', 'Global commission rules updated.'));
     } catch (err) {
-      setAdminMsg(err instanceof Error ? err.message : 'تعذر تحديث العمولات.');
+      setAdminMsg(err instanceof Error ? err.message : t('تعذر تحديث العمولات.', 'Update failed.'));
     }
   };
 
-  const handleRecordFinancialEntry = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!authUser?.email) return;
-    if (finSource.trim().length < 2 || finPurpose.trim().length < 2) {
-      setFinMsg('يرجى إدخال اسم الجهة والبيان (حرفان على الأقل).');
-      return;
-    }
-    const targetAcc = ownerAccounts.find((a) => a.accountId === finChannel);
-    setFinBusy(true);
-    setFinMsg(null);
+  const handleAssignRole = async (target: UserProfile) => {
+    if (!authUser) return;
+    const draft = roleDrafts[target.uid] || {
+      role: target.role,
+      tenantId: target.tenantId || '',
+      status: target.status,
+    };
+    setSavingUserUid(target.uid);
+    setAdminMsg(null);
     try {
-      await recordOwnerFinancialEntry({
-        actorEmail: authUser.email,
-        direction: finDirection,
-        sourceOrBeneficiary: finSource.trim(),
-        purpose: finPurpose.trim(),
-        expenseCategory: finDirection === 'inflow' ? 'none' : finCategory,
-        channel: finChannel,
-        grossEGP: Math.max(1, Number(finGross) || 1),
-        commissionPct: Math.min(100, Math.max(0, Number(finCommPct) || 0)),
-        currentAccountBalance: targetAcc?.balanceEGP ?? 0,
-        currentAccountLabel:
-          targetAcc?.labelAr ||
-          (finChannel === 'bank'
-            ? 'الحساب البنكي الرئيسي'
-            : finChannel === 'e_wallet'
-              ? 'المحفظة الإلكترونية المركزية'
-              : 'الخزينة النقدية'),
+      await updateUserRoleAndTenantByAdmin({
+        targetUid: target.uid,
+        role: draft.role as CanonicalBasitRole,
+        tenantId: draft.tenantId,
+        status: draft.status,
+        adminUid: authUser.uid,
       });
-      setFinMsg('تم ترحيل القيد المالي وتحديث رصيد الحساب بنجاح.');
-      setFinSource('');
-      setFinPurpose('');
+      setAdminMsg(
+        t(
+          `تم تحديث صلاحية ${target.displayName} إلى ${normalizeRoleLabel(draft.role as CanonicalBasitRole, false)}.`,
+          `Updated ${target.displayName} role to ${draft.role}.`,
+        ),
+      );
     } catch (err) {
-      setFinMsg(err instanceof Error ? err.message : 'تعذر تسجيل القيد المالي.');
+      setAdminMsg(err instanceof Error ? err.message : t('تعذر تحديث الصلاحية.', 'Role update failed.'));
     } finally {
-      setFinBusy(false);
+      setSavingUserUid(null);
     }
   };
 
@@ -272,62 +288,104 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
 
   return (
     <div className="space-y-5">
+      {/* Header Banner */}
+      <div className="bg-[#FFFFFF] border border-[#ECE4E8] rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-lg font-bold text-[#1F0B22]">
+            {t('الهوية والصلاحيات والحوكمة المؤسسية', 'Identity, Roles & Enterprise Governance')}
+          </h1>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+            <span>{t('7 أدوار قياسية معزولة', '7 isolated canonical roles')}</span>
+            <span aria-hidden="true">·</span>
+            <span>{t('فصل تام للبيانات الشخصية (PII)', 'Strict PII vault separation')}</span>
+            <span aria-hidden="true">·</span>
+            <span>{t('سجل تدقيق غير قابل للتعديل', 'Immutable audit trail')}</span>
+          </div>
+        </div>
+
+        {isPlatformOwner && onNavigateFinance && (
+          <button
+            type="button"
+            onClick={onNavigateFinance}
+            className="min-h-[44px] px-4 inline-flex items-center justify-center gap-2 rounded-xl bg-[#3B123F] text-white text-xs font-semibold hover:bg-[#501C5A] cursor-pointer shrink-0"
+          >
+            <Wallet className="w-4 h-4 text-[#D4AF37]" />
+            {t('فتح نظام المالك المالي', 'Open Owner Financial Vault')}
+          </button>
+        )}
+      </div>
+
       {/* Identity & PII Split Vault */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-        <section className="lg:col-span-5 bg-white border border-slate-200/90 rounded-2xl p-5">
+        <section className="lg:col-span-5 bg-[#FFFFFF] border border-[#ECE4E8] rounded-2xl p-5">
           <div className="flex items-start justify-between gap-3">
             <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-xl bg-[#4F2487]/10 text-[#4F2487] flex items-center justify-center shrink-0">
+              <div className="w-10 h-10 rounded-xl bg-[#3B123F]/10 text-[#3B123F] flex items-center justify-center shrink-0">
                 <UserCheck className="w-5 h-5" />
               </div>
               <div>
-                <h2 className="text-sm font-bold text-slate-900">
-                  الهوية والصلاحيات (users/&#123;uid&#125;)
+                <h2 className="text-sm font-bold text-[#1F0B22]">
+                  {t('الهوية والصلاحيات (users/{uid})', 'Identity & Role (users/{uid})')}
                 </h2>
                 <p className="text-xs text-slate-500">
-                  ملف تشغيلي خالٍ تماماً من أي معلومات شخصية (PII)
+                  {t('ملف تشغيلي خالٍ تماماً من أي معلومات شخصية (PII)', 'Operational record with zero PII fields')}
                 </p>
               </div>
             </div>
           </div>
 
           {!authUser ? (
-            <div className="mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-center">
+            <div className="mt-4 p-4 rounded-xl bg-[#FFFEFC] border border-[#ECE4E8] text-center">
               <p className="text-xs text-slate-600 mb-3">
-                سجّل الدخول بحساب Google الموثق (email_verified == true) للوصول المباشر إلى قاعدة البيانات.
+                {t(
+                  'سجّل الدخول بحساب Google الموثق للوصول المباشر إلى قاعدة البيانات.',
+                  'Sign in with a verified Google account to access Firestore workflows.',
+                )}
               </p>
               <button
                 type="button"
                 onClick={onSignIn}
-                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#4F2487] text-white text-xs font-semibold hover:bg-[#3f1c6d] cursor-pointer"
+                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl bg-[#3B123F] text-white text-xs font-semibold hover:bg-[#501C5A] cursor-pointer"
               >
                 <LogIn className="w-4 h-4" />
-                تسجيل الدخول عبر Google
+                {t('تسجيل الدخول عبر Google', 'Sign in with Google')}
               </button>
             </div>
           ) : (
             <div className="mt-4 space-y-3 text-xs">
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+              <div className="p-3.5 rounded-xl bg-[#FFFEFC] border border-[#ECE4E8] space-y-2">
                 <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">الاسم</span>
-                  <span className="font-bold text-slate-900">
-                    {userProfile?.displayName || authUser.displayName || 'مستخدم فيض'}
+                  <span className="text-slate-500">{t('الاسم', 'Name')}</span>
+                  <span className="font-bold text-[#1F0B22]">
+                    {userProfile?.displayName || authUser.displayName || 'BASIT User'}
                   </span>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">الدور الفعلي</span>
-                  <span className="font-mono font-semibold text-[#4F2487]">
-                    {isAdmin ? 'central_super_admin' : userProfile?.role || 'customer'}
+                  <span className="text-slate-500">{t('الدور الفعلي', 'Active Role')}</span>
+                  <span className="font-semibold text-[#3B123F]">
+                    {isPlatformOwner
+                      ? normalizeRoleLabel('platform_owner', isEn)
+                      : normalizeRoleLabel(userProfile?.role, isEn)}
                   </span>
                 </div>
+                {userProfile?.tenantId && (
+                  <div className="flex justify-between gap-2">
+                    <span className="text-slate-500">{t('المنشأة المرتبطة', 'Assigned Workspace')}</span>
+                    <span className="font-mono text-[11px] text-[#1F0B22]">
+                      {userProfile.tenantId}
+                    </span>
+                  </div>
+                )}
                 <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">توثيق البريد</span>
+                  <span className="text-slate-500">{t('توثيق البريد', 'Email Verification')}</span>
                   <span className="font-semibold text-emerald-700">
-                    {authUser.emailVerified ? 'موثق (email_verified: true)' : 'غير موثق'}
+                    {authUser.emailVerified
+                      ? t('موثق', 'Verified')
+                      : t('غير موثق', 'Unverified')}
                   </span>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <span className="text-slate-500">المعرف</span>
+                  <span className="text-slate-500">{t('المعرف', 'UID')}</span>
                   <span className="font-mono text-[11px] text-slate-600 truncate max-w-[180px]">
                     {authUser.uid}
                   </span>
@@ -337,49 +395,49 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
               <button
                 type="button"
                 onClick={onSignOut}
-                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 rounded-xl border border-[#ECE4E8] text-xs font-semibold text-slate-700 hover:bg-[#FFFEFC] cursor-pointer"
               >
                 <LogOut className="w-4 h-4" />
-                تسجيل الخروج
+                {t('تسجيل الخروج', 'Sign Out')}
               </button>
             </div>
           )}
         </section>
 
         {/* Private PII Vault */}
-        <section className="lg:col-span-7 bg-white border border-slate-200/90 rounded-2xl p-5">
+        <section className="lg:col-span-7 bg-[#FFFFFF] border border-[#ECE4E8] rounded-2xl p-5">
           <div className="flex items-center gap-2 mb-3">
-            <Lock className="w-4 h-4 text-[#4F2487]" />
+            <Lock className="w-4 h-4 text-[#3B123F]" />
             <div>
-              <h2 className="text-sm font-bold text-slate-900">
-                خزينة البيانات الشخصية المعزولة (private_profile/main)
+              <h2 className="text-sm font-bold text-[#1F0B22]">
+                {t('خزينة البيانات الشخصية المعزولة (private_profile/main)', 'Isolated Private PII Vault')}
               </h2>
               <p className="text-xs text-slate-500">
-                لا تُقرأ أو تُكتب إلا بواسطة صاحب الحساب أو الإدارة المركزية
+                {t('لا تُقرأ أو تُكتب إلا بواسطة صاحب الحساب أو الإدارة المركزية', 'Readable & writable only by account owner or central admin')}
               </p>
             </div>
           </div>
 
           {!authUser ? (
             <p className="text-xs text-slate-500 py-4">
-              قم بتسجيل الدخول أولاً لإدارة بيانات التواصل والملف الضريبي الخاصة بك.
+              {t('قم بتسجيل الدخول أولاً لإدارة بيانات التواصل والملف الضريبي الخاصة بك.', 'Sign in first to manage your private contact and tax profile.')}
             </p>
           ) : (
             <form onSubmit={handleSavePii} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  البريد الإلكتروني الموثق
+                  {t('البريد الإلكتروني الموثق', 'Verified Email')}
                 </label>
                 <input
                   type="email"
                   value={authUser.email || ''}
                   disabled
-                  className="w-full min-h-[44px] px-3 text-xs bg-slate-100 border border-slate-200 rounded-xl text-slate-600"
+                  className="w-full min-h-[44px] px-3 text-xs bg-slate-100 border border-[#ECE4E8] rounded-xl text-slate-600"
                 />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  رقم الهاتف
+                  {t('رقم الهاتف', 'Phone Number')}
                 </label>
                 <input
                   type="tel"
@@ -387,31 +445,31 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                   onChange={(e) => setPhone(e.target.value)}
                   maxLength={32}
                   placeholder="+2010xxxxxxxx"
-                  className="w-full min-h-[44px] px-3 text-xs bg-white border border-slate-300 rounded-xl"
+                  className="w-full min-h-[44px] px-3 text-xs bg-white border border-[#ECE4E8] rounded-xl"
                 />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  الرقم القومي / البطاقة الضريبية
+                  {t('الرقم القومي / البطاقة الضريبية', 'National / Tax ID')}
                 </label>
                 <input
                   type="text"
                   value={taxId}
                   onChange={(e) => setTaxId(e.target.value)}
                   maxLength={64}
-                  className="w-full min-h-[44px] px-3 text-xs bg-white border border-slate-300 rounded-xl"
+                  className="w-full min-h-[44px] px-3 text-xs bg-white border border-[#ECE4E8] rounded-xl"
                 />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  العنوان الخاص
+                  {t('العنوان الخاص', 'Address')}
                 </label>
                 <input
                   type="text"
                   value={address}
                   onChange={(e) => setAddress(e.target.value)}
                   maxLength={240}
-                  className="w-full min-h-[44px] px-3 text-xs bg-white border border-slate-300 rounded-xl"
+                  className="w-full min-h-[44px] px-3 text-xs bg-white border border-[#ECE4E8] rounded-xl"
                 />
               </div>
 
@@ -425,9 +483,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                 <button
                   type="submit"
                   disabled={savingPii}
-                  className="min-h-[44px] px-5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#4F2487] disabled:opacity-50 cursor-pointer"
+                  className="min-h-[44px] px-5 rounded-xl bg-[#1F0B22] text-white text-xs font-semibold hover:bg-[#3B123F] disabled:opacity-50 cursor-pointer"
                 >
-                  {savingPii ? 'جاري الحفظ...' : 'حفظ في الخزينة المعزولة'}
+                  {savingPii ? t('جاري الحفظ...', 'Saving...') : t('حفظ في الخزينة المعزولة', 'Save to Private Vault')}
                 </button>
               </div>
             </form>
@@ -435,26 +493,31 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
         </section>
       </div>
 
-      {/* Central Super Admin Console */}
+      {/* Central Admin Governance */}
       {isAdmin && (
-        <section className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <section className="bg-[#FFFFFF] border border-[#ECE4E8] rounded-2xl overflow-hidden">
+          <div className="px-5 py-4 border-b border-[#ECE4E8] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h2 className="text-base font-bold text-slate-900">
-                لوحة الإدارة المركزية (Central Admin Governance)
+              <h2 className="text-base font-bold text-[#1F0B22]">
+                {t('لوحة الإدارة المركزية (Central Governance)', 'Central Admin Governance Console')}
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                اعتماد طلبات الانضمام، الفرص، إصدار عقود الانتفاع، تعيين السعاة، وضبط العمولات
+                {t(
+                  'تعيين الأدوار الـ 7 وربط المصانع، اعتماد طلبات الانضمام والفرص، السعاة، والعمولات',
+                  'Assign the 7 BASIT roles & factories, approve onboarding/deals, couriers & commissions',
+                )}
               </p>
             </div>
             <button
               type="button"
               onClick={handleSeedData}
               disabled={seeding}
-              className="min-h-[44px] px-4 inline-flex items-center justify-center gap-2 rounded-xl bg-[#4F2487] text-white text-xs font-semibold hover:bg-[#3f1c6d] disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
+              className="min-h-[44px] px-4 inline-flex items-center justify-center gap-2 rounded-xl bg-[#3B123F] text-white text-xs font-semibold hover:bg-[#501C5A] disabled:opacity-50 cursor-pointer whitespace-nowrap shrink-0"
             >
-              <Database className="w-4 h-4" />
-              {seeding ? 'جاري التهيئة...' : 'تهيئة البيانات الأساسية في Firestore'}
+              <Database className="w-4 h-4 text-[#D4AF37]" />
+              {seeding
+                ? t('جاري التهيئة...', 'Seeding...')
+                : t('تهيئة البيانات الأساسية في Firestore', 'Seed BASIT Platform Data')}
             </button>
           </div>
 
@@ -465,26 +528,234 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
             </div>
           )}
 
+          {/* 7-Role Access & Workspace Assignment Matrix (Bootstrapped Admin) */}
+          {isBootAdmin && (
+            <div className="p-5 border-b border-[#ECE4E8]">
+              <h3 className="text-xs font-bold text-[#1F0B22] flex items-center gap-1.5 mb-3">
+                <Users className="w-4 h-4 text-[#3B123F]" />
+                {t(
+                  `توزيع صلاحيات المستخدمين والربط بالمصانع والمطابخ (${allUsers.length})`,
+                  `User Role & Workspace Assignment (${allUsers.length})`,
+                )}
+              </h3>
+
+              {allUsers.length === 0 ? (
+                <p className="text-xs text-slate-500">
+                  {t('لم يسجل مستخدمون إضافيون بعد.', 'No additional user profiles registered yet.')}
+                </p>
+              ) : (
+                <>
+                  {/* Mobile Card List (md:hidden) */}
+                  <div className="md:hidden space-y-2.5">
+                    {allUsers.map((u) => {
+                      const draft = roleDrafts[u.uid] || {
+                        role: u.role,
+                        tenantId: u.tenantId || '',
+                        status: u.status,
+                      };
+                      return (
+                        <div
+                          key={u.uid}
+                          className="p-3.5 rounded-2xl bg-[#FFFEFC] border border-[#ECE4E8] space-y-2.5 text-xs"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="font-bold text-[#1F0B22] truncate">{u.displayName}</div>
+                              <div className="text-[11px] font-mono text-slate-500 truncate">{u.uid.slice(0, 14)}…</div>
+                            </div>
+                            <button
+                              type="button"
+                              disabled={savingUserUid === u.uid}
+                              onClick={() => handleAssignRole(u)}
+                              className="min-h-[44px] px-4 rounded-xl bg-[#3B123F] text-white text-xs font-bold hover:bg-[#501C5A] disabled:opacity-50 cursor-pointer shrink-0"
+                            >
+                              {savingUserUid === u.uid ? '...' : t('حفظ', 'Apply')}
+                            </button>
+                          </div>
+
+                          <div className="grid grid-cols-1 gap-2">
+                            <select
+                              value={draft.role}
+                              onChange={(e) =>
+                                setRoleDrafts((prev) => ({
+                                  ...prev,
+                                  [u.uid]: { ...draft, role: e.target.value },
+                                }))
+                              }
+                              className="w-full min-h-[44px] px-3 text-xs bg-white border border-[#ECE4E8] rounded-xl"
+                            >
+                              {CANONICAL_ROLES.map((cr) => (
+                                <option key={cr} value={cr}>
+                                  {isEn ? BASIT_ROLE_LABELS[cr].en : BASIT_ROLE_LABELS[cr].ar}
+                                </option>
+                              ))}
+                            </select>
+
+                            <div className="grid grid-cols-2 gap-2">
+                              <select
+                                value={draft.tenantId}
+                                onChange={(e) =>
+                                  setRoleDrafts((prev) => ({
+                                    ...prev,
+                                    [u.uid]: { ...draft, tenantId: e.target.value },
+                                  }))
+                                }
+                                className="w-full min-h-[44px] px-2.5 text-xs bg-white border border-[#ECE4E8] rounded-xl"
+                              >
+                                <option value="">{t('بدون ربط', 'Unassigned')}</option>
+                                {storefronts.map((sf) => (
+                                  <option key={sf.tenantId} value={sf.tenantId}>
+                                    {isEn ? sf.nameEn || sf.name : sf.name}
+                                  </option>
+                                ))}
+                              </select>
+
+                              <select
+                                value={draft.status}
+                                onChange={(e) =>
+                                  setRoleDrafts((prev) => ({
+                                    ...prev,
+                                    [u.uid]: {
+                                      ...draft,
+                                      status: e.target.value as UserProfile['status'],
+                                    },
+                                  }))
+                                }
+                                className="w-full min-h-[44px] px-2.5 text-xs bg-white border border-[#ECE4E8] rounded-xl"
+                              >
+                                <option value="active">{t('نشط', 'Active')}</option>
+                                <option value="pending">{t('معلق', 'Pending')}</option>
+                                <option value="suspended">{t('موقوف', 'Suspended')}</option>
+                              </select>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Desktop Table (hidden md:block) */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-[#ECE4E8] text-slate-500">
+                          <th className="py-2 px-2 text-start">{t('المستخدم', 'User')}</th>
+                          <th className="py-2 px-2 text-start">{t('الدور', 'Role')}</th>
+                          <th className="py-2 px-2 text-start">{t('المنشأة / المصنع', 'Tenant / Factory')}</th>
+                          <th className="py-2 px-2 text-start">{t('الحالة', 'Status')}</th>
+                          <th className="py-2 px-2 text-start">{t('حفظ', 'Save')}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-[#ECE4E8]/70">
+                        {allUsers.map((u) => {
+                          const draft = roleDrafts[u.uid] || {
+                            role: u.role,
+                            tenantId: u.tenantId || '',
+                            status: u.status,
+                          };
+                          return (
+                            <tr key={u.uid}>
+                              <td className="py-2.5 px-2">
+                                <div className="font-bold text-[#1F0B22]">{u.displayName}</div>
+                                <div className="text-[11px] font-mono text-slate-500">{u.uid.slice(0, 14)}…</div>
+                              </td>
+                              <td className="py-2.5 px-2">
+                                <select
+                                  value={draft.role}
+                                  onChange={(e) =>
+                                    setRoleDrafts((prev) => ({
+                                      ...prev,
+                                      [u.uid]: { ...draft, role: e.target.value },
+                                    }))
+                                  }
+                                  className="min-h-[36px] px-2 text-xs bg-white border border-[#ECE4E8] rounded-lg"
+                                >
+                                  {CANONICAL_ROLES.map((cr) => (
+                                    <option key={cr} value={cr}>
+                                      {isEn ? BASIT_ROLE_LABELS[cr].en : BASIT_ROLE_LABELS[cr].ar}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="py-2.5 px-2">
+                                <select
+                                  value={draft.tenantId}
+                                  onChange={(e) =>
+                                    setRoleDrafts((prev) => ({
+                                      ...prev,
+                                      [u.uid]: { ...draft, tenantId: e.target.value },
+                                    }))
+                                  }
+                                  className="min-h-[36px] px-2 text-xs bg-white border border-[#ECE4E8] rounded-lg max-w-[180px]"
+                                >
+                                  <option value="">{t('بدون ربط محدد', 'Unassigned')}</option>
+                                  {storefronts.map((sf) => (
+                                    <option key={sf.tenantId} value={sf.tenantId}>
+                                      {isEn ? sf.nameEn || sf.name : sf.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="py-2.5 px-2">
+                                <select
+                                  value={draft.status}
+                                  onChange={(e) =>
+                                    setRoleDrafts((prev) => ({
+                                      ...prev,
+                                      [u.uid]: {
+                                        ...draft,
+                                        status: e.target.value as UserProfile['status'],
+                                      },
+                                    }))
+                                  }
+                                  className="min-h-[36px] px-2 text-xs bg-white border border-[#ECE4E8] rounded-lg"
+                                >
+                                  <option value="active">{t('نشط', 'Active')}</option>
+                                  <option value="pending">{t('معلق', 'Pending')}</option>
+                                  <option value="suspended">{t('موقوف', 'Suspended')}</option>
+                                </select>
+                              </td>
+                              <td className="py-2.5 px-2">
+                                <button
+                                  type="button"
+                                  disabled={savingUserUid === u.uid}
+                                  onClick={() => handleAssignRole(u)}
+                                  className="min-h-[36px] px-3 rounded-lg bg-[#1F0B22] text-white text-[11px] font-semibold hover:bg-[#3B123F] disabled:opacity-50 cursor-pointer"
+                                >
+                                  {savingUserUid === u.uid ? '...' : t('تحديث', 'Apply')}
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           <div className="p-5 grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* Onboarding Approvals */}
-            <div className="border border-slate-200 rounded-xl p-4 space-y-3">
-              <h3 className="text-xs font-bold text-slate-900">
-                طلبات الانضمام المعلقة ({pendingApps.length})
+            <div className="border border-[#ECE4E8] rounded-xl p-4 space-y-3 bg-[#FFFEFC]/60">
+              <h3 className="text-xs font-bold text-[#1F0B22]">
+                {t(`طلبات الانضمام المعلقة (${pendingApps.length})`, `Pending Partner Applications (${pendingApps.length})`)}
               </h3>
               {pendingApps.length === 0 ? (
-                <p className="text-xs text-slate-500">لا توجد طلبات انضمام معلقة.</p>
+                <p className="text-xs text-slate-500">{t('لا توجد طلبات انضمام معلقة.', 'No pending applications.')}</p>
               ) : (
                 <ul className="space-y-2.5">
                   {pendingApps.map((app) => (
                     <li
                       key={app.appId}
-                      className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-2"
+                      className="p-3 rounded-xl bg-white border border-[#ECE4E8] space-y-2"
                     >
-                      <div className="text-xs font-bold text-slate-900">
+                      <div className="text-xs font-bold text-[#1F0B22]">
                         {app.businessName} · {app.targetRole}
                       </div>
                       <div className="text-[11px] text-slate-500">
-                        {app.contactName} · {app.city} · سجل: {app.commercialRegRef}
+                        {app.contactName} · {app.city} · {app.commercialRegRef}
                       </div>
                       <div className="flex gap-2">
                         <button
@@ -500,7 +771,7 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                           }
                           className="min-h-[38px] px-3 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
                         >
-                          اعتماد وإنشاء الكيان
+                          {t('اعتماد وإنشاء الكيان', 'Approve & Create Workspace')}
                         </button>
                         <button
                           type="button"
@@ -513,9 +784,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                               adminComment: 'لم يستوفِ المتطلبات',
                             })
                           }
-                          className="min-h-[38px] px-3 rounded-lg border border-slate-300 text-red-600 text-xs font-semibold cursor-pointer"
+                          className="min-h-[38px] px-3 rounded-lg border border-[#ECE4E8] text-red-600 text-xs font-semibold cursor-pointer"
                         >
-                          رفض
+                          {t('رفض', 'Reject')}
                         </button>
                       </div>
                     </li>
@@ -525,26 +796,26 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
             </div>
 
             {/* Opportunity & Usufruct Contract Approvals */}
-            <div className="border border-slate-200 rounded-xl p-4 space-y-4">
+            <div className="border border-[#ECE4E8] rounded-xl p-4 space-y-4 bg-[#FFFEFC]/60">
               <div>
-                <h3 className="text-xs font-bold text-slate-900 mb-2">
-                  فرص فيض بانتظار الاعتماد ({pendingOpps.length})
+                <h3 className="text-xs font-bold text-[#1F0B22] mb-2">
+                  {t(`فرص بانتظار الاعتماد (${pendingOpps.length})`, `Pending Opportunities (${pendingOpps.length})`)}
                 </h3>
                 {pendingOpps.length === 0 ? (
-                  <p className="text-xs text-slate-500">لا توجد فرص معلقة.</p>
+                  <p className="text-xs text-slate-500">{t('لا توجد فرص معلقة.', 'No pending opportunities.')}</p>
                 ) : (
                   <ul className="space-y-2">
                     {pendingOpps.map((opp) => (
                       <li
                         key={opp.oppId}
-                        className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2"
+                        className="p-3 rounded-xl bg-white border border-[#ECE4E8] flex items-center justify-between gap-2"
                       >
                         <div className="min-w-0">
-                          <div className="text-xs font-bold text-slate-900 truncate">
+                          <div className="text-xs font-bold text-[#1F0B22] truncate">
                             {opp.title}
                           </div>
                           <div className="text-[11px] text-slate-500 tabular-nums">
-                            {opp.costOrInvestmentEGP.toLocaleString('en-US')} ج.م · {opp.city}
+                            {opp.costOrInvestmentEGP.toLocaleString('en-US')} EGP · {opp.city}
                           </div>
                         </div>
                         <div className="flex gap-1.5 shrink-0">
@@ -556,7 +827,7 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                             }
                             className="min-h-[38px] px-3 rounded-lg bg-emerald-600 text-white text-xs font-semibold cursor-pointer"
                           >
-                            اعتماد
+                            {t('اعتماد', 'Approve')}
                           </button>
                           <button
                             type="button"
@@ -564,9 +835,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                               authUser &&
                               approveOrRejectOpportunity(opp.oppId, 'rejected', authUser.uid)
                             }
-                            className="min-h-[38px] px-3 rounded-lg border border-slate-300 text-red-600 text-xs font-semibold cursor-pointer"
+                            className="min-h-[38px] px-3 rounded-lg border border-[#ECE4E8] text-red-600 text-xs font-semibold cursor-pointer"
                           >
-                            رفض
+                            {t('رفض', 'Reject')}
                           </button>
                         </div>
                       </li>
@@ -575,23 +846,23 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                 )}
               </div>
 
-              <div className="pt-3 border-t border-slate-100">
-                <h3 className="text-xs font-bold text-slate-900 mb-2">
-                  مقترحات انتفاع جاهزة لإصدار العقد ({awaitingAdminProposals.length})
+              <div className="pt-3 border-t border-[#ECE4E8]">
+                <h3 className="text-xs font-bold text-[#1F0B22] mb-2">
+                  {t(`مقترحات انتفاع جاهزة لإصدار العقد (${awaitingAdminProposals.length})`, `Usufruct Proposals Ready (${awaitingAdminProposals.length})`)}
                 </h3>
                 {awaitingAdminProposals.length === 0 ? (
                   <p className="text-xs text-slate-500">
-                    لا توجد مقترحات معتمدة من مالك الموقع بانتظار العقد.
+                    {t('لا توجد مقترحات معتمدة من مالك الموقع بانتظار العقد.', 'No proposals awaiting contract.')}
                   </p>
                 ) : (
                   <ul className="space-y-2">
                     {awaitingAdminProposals.map((prop) => (
                       <li
                         key={prop.proposalId}
-                        className="p-3 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-2"
+                        className="p-3 rounded-xl bg-white border border-[#ECE4E8] flex items-center justify-between gap-2"
                       >
                         <div className="text-xs">
-                          <div className="font-bold text-slate-900">
+                          <div className="font-bold text-[#1F0B22]">
                             {prop.proposerName} ({prop.proposerProfitPct}%/{prop.siteOwnerProfitPct}%/{prop.platformUsufructPct}%)
                           </div>
                           <div className="text-[11px] text-slate-500">{prop.proposalId}</div>
@@ -601,9 +872,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                           onClick={() =>
                             authUser && issueUsufructContractByAdmin(prop, authUser.uid)
                           }
-                          className="min-h-[38px] px-3 rounded-lg bg-[#4F2487] text-white text-xs font-semibold cursor-pointer shrink-0"
+                          className="min-h-[38px] px-3 rounded-lg bg-[#3B123F] text-white text-xs font-semibold cursor-pointer shrink-0"
                         >
-                          إصدار العقد
+                          {t('إصدار العقد', 'Issue Contract')}
                         </button>
                       </li>
                     ))}
@@ -615,15 +886,15 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
             {/* Commission Rules & Plans */}
             <form
               onSubmit={handleSaveCommission}
-              className="border border-slate-200 rounded-xl p-4 space-y-3"
+              className="border border-[#ECE4E8] rounded-xl p-4 space-y-3 bg-[#FFFEFC]/60"
             >
-              <h3 className="text-xs font-bold text-slate-900">
-                ضبط العمولات المركزية وباقات الاشتراك ({plans.length})
+              <h3 className="text-xs font-bold text-[#1F0B22]">
+                {t(`ضبط العمولات المركزية وباقات الاشتراك (${plans.length})`, `Global Commission & Plans (${plans.length})`)}
               </h3>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] text-slate-600 mb-1">
-                    عمولة الطلبات الافتراضية (%)
+                    {t('عمولة الطلبات الافتراضية (%)', 'Default Order Commission (%)')}
                   </label>
                   <input
                     type="number"
@@ -631,43 +902,43 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                     max={60}
                     value={orderCommPct}
                     onChange={(e) => setOrderCommPct(e.target.value)}
-                    className="w-full min-h-[40px] px-3 text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
+                    className="w-full min-h-[40px] px-3 text-xs bg-white border border-[#ECE4E8] rounded-lg tabular-nums"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] text-slate-600 mb-1">
-                    الحد الأدنى لرسوم التوصيل (ج.م)
+                    {t('الحد الأدنى لرسوم التوصيل (ج.م)', 'Min Delivery Fee (EGP)')}
                   </label>
                   <input
                     type="number"
                     min={10}
                     value={minDeliveryFee}
                     onChange={(e) => setMinDeliveryFee(e.target.value)}
-                    className="w-full min-h-[40px] px-3 text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
+                    className="w-full min-h-[40px] px-3 text-xs bg-white border border-[#ECE4E8] rounded-lg tabular-nums"
                   />
                 </div>
               </div>
               <button
                 type="submit"
-                className="min-h-[40px] px-4 rounded-lg bg-slate-900 text-white text-xs font-semibold cursor-pointer"
+                className="min-h-[40px] px-4 rounded-lg bg-[#1F0B22] text-white text-xs font-semibold cursor-pointer"
               >
-                حفظ قواعد العمولات
+                {t('حفظ قواعد العمولات', 'Save Commission Rules')}
               </button>
             </form>
 
-            {/* Assign Courier to Requested Deliveries */}
-            <div className="border border-slate-200 rounded-xl p-4 space-y-3">
-              <h3 className="text-xs font-bold text-slate-900">
-                توجيه شحنات التوصيل للسعاة ({unassignedDeliveries.length})
+            {/* Assign Courier */}
+            <div className="border border-[#ECE4E8] rounded-xl p-4 space-y-3 bg-[#FFFEFC]/60">
+              <h3 className="text-xs font-bold text-[#1F0B22]">
+                {t(`توجيه شحنات التوصيل للسعاة (${unassignedDeliveries.length})`, `Dispatch Assignment (${unassignedDeliveries.length})`)}
               </h3>
               {unassignedDeliveries.length === 0 ? (
-                <p className="text-xs text-slate-500">لا توجد شحنات بانتظار التوجيه.</p>
+                <p className="text-xs text-slate-500">{t('لا توجد شحنات بانتظار التوجيه.', 'No unassigned deliveries.')}</p>
               ) : (
                 <ul className="space-y-2">
                   {unassignedDeliveries.map((del) => (
                     <li
                       key={del.deliveryId}
-                      className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center gap-2"
+                      className="p-2.5 rounded-lg bg-white border border-[#ECE4E8] flex flex-col sm:flex-row sm:items-center gap-2"
                     >
                       <span className="text-xs font-mono text-slate-700 flex-1 truncate">
                         {del.deliveryId} · {del.dropoffLocation}
@@ -681,11 +952,11 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                               [del.deliveryId]: e.target.value,
                             }))
                           }
-                          className="min-h-[38px] px-2 text-xs bg-white border border-slate-300 rounded-lg"
+                          className="min-h-[38px] px-2 text-xs bg-white border border-[#ECE4E8] rounded-lg"
                         >
                           {couriers.length === 0 ? (
                             <option value={authUser?.uid || ''}>
-                              تعيين الحساب الحالي كساعي تجريبي
+                              {t('تعيين الحساب الحالي كساعي', 'Assign current account')}
                             </option>
                           ) : (
                             couriers.map((c) => (
@@ -710,9 +981,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                               );
                             }
                           }}
-                          className="min-h-[38px] px-3 rounded-lg bg-[#4F2487] text-white text-xs font-semibold cursor-pointer shrink-0"
+                          className="min-h-[38px] px-3 rounded-lg bg-[#3B123F] text-white text-xs font-semibold cursor-pointer shrink-0"
                         >
-                          تعيين
+                          {t('تعيين', 'Assign')}
                         </button>
                       </div>
                     </li>
@@ -724,25 +995,24 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
 
           {/* BASIT Operational Approvals */}
           <div className="px-5 pb-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* VIP Direct Orders (Ha-Be & Commercial Offers) */}
-            <div className="border border-slate-200 rounded-xl p-4 space-y-2.5">
-              <h3 className="text-xs font-bold text-slate-900">
-                اعتماد طلبات باسط المباشرة و Ha-Be ({openVipOrders.length})
+            <div className="border border-[#ECE4E8] rounded-xl p-4 space-y-2.5 bg-[#FFFEFC]/60">
+              <h3 className="text-xs font-bold text-[#1F0B22]">
+                {t(`اعتماد الطلبات المؤسسية والمصانع المباشرة (${openVipOrders.length})`, `Direct Factory & Enterprise Orders (${openVipOrders.length})`)}
               </h3>
               {openVipOrders.length === 0 ? (
-                <p className="text-xs text-slate-500">لا توجد طلبات مباشرة مفتوحة.</p>
+                <p className="text-xs text-slate-500">{t('لا توجد طلبات مباشرة مفتوحة.', 'No open direct orders.')}</p>
               ) : (
                 <ul className="space-y-2 max-h-64 overflow-y-auto">
                   {openVipOrders.map((vo) => (
                     <li
                       key={vo.orderId}
-                      className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2 text-xs"
+                      className="p-2.5 rounded-lg bg-white border border-[#ECE4E8] space-y-2 text-xs"
                     >
                       <div className="flex justify-between gap-2">
-                        <span className="font-bold text-slate-900">
-                          {vo.customerName} ({vo.totalEGP} ج.م)
+                        <span className="font-bold text-[#1F0B22]">
+                          {vo.customerName} ({vo.totalEGP} EGP)
                         </span>
-                        <span className="font-mono text-[11px] text-[#4F2487]">
+                        <span className="font-mono text-[11px] text-[#3B123F]">
                           {vo.status}
                         </span>
                       </div>
@@ -753,8 +1023,8 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                         onChange={(e) =>
                           setVipReplyMap((p) => ({ ...p, [vo.orderId]: e.target.value }))
                         }
-                        placeholder="رد الإدارة / ملاحظة التنفيذ..."
-                        className="w-full min-h-[34px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
+                        placeholder={t('رد الإدارة / ملاحظة التنفيذ...', 'Admin reply / fulfillment note...')}
+                        className="w-full min-h-[34px] px-2.5 text-xs bg-white border border-[#ECE4E8] rounded-lg"
                       />
                       <div className="flex flex-wrap gap-1.5">
                         <button
@@ -770,7 +1040,7 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                           }
                           className="min-h-[34px] px-2.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
                         >
-                          {vo.status === 'pending_owner' ? 'اعتماد الطلب' : 'إتمام التنفيذ'}
+                          {vo.status === 'pending_owner' ? t('اعتماد الطلب', 'Approve') : t('إتمام التنفيذ', 'Complete')}
                         </button>
                         <button
                           type="button"
@@ -783,9 +1053,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                               authUser.uid,
                             )
                           }
-                          className="min-h-[34px] px-2.5 rounded-lg border border-slate-300 text-red-600 text-[11px] font-semibold cursor-pointer"
+                          className="min-h-[34px] px-2.5 rounded-lg border border-[#ECE4E8] text-red-600 text-[11px] font-semibold cursor-pointer"
                         >
-                          رفض
+                          {t('رفض', 'Reject')}
                         </button>
                       </div>
                     </li>
@@ -794,27 +1064,26 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
               )}
             </div>
 
-            {/* Benefit Bookings & Logistics Inquiries */}
-            <div className="border border-slate-200 rounded-xl p-4 space-y-3">
+            <div className="border border-[#ECE4E8] rounded-xl p-4 space-y-3 bg-[#FFFEFC]/60">
               <div>
-                <h3 className="text-xs font-bold text-slate-900 mb-2">
-                  حجوزات المزايا والترفيه المعلقة ({pendingBookings.length})
+                <h3 className="text-xs font-bold text-[#1F0B22] mb-2">
+                  {t(`حجوزات المزايا والترفيه المعلقة (${pendingBookings.length})`, `Pending Benefit Bookings (${pendingBookings.length})`)}
                 </h3>
                 {pendingBookings.length === 0 ? (
-                  <p className="text-xs text-slate-500">لا توجد حجوزات مزايا معلقة.</p>
+                  <p className="text-xs text-slate-500">{t('لا توجد حجوزات مزايا معلقة.', 'No pending bookings.')}</p>
                 ) : (
                   <ul className="space-y-2">
                     {pendingBookings.map((b) => (
                       <li
                         key={b.bookingId}
-                        className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs"
+                        className="p-2.5 rounded-lg bg-white border border-[#ECE4E8] flex items-center justify-between gap-2 text-xs"
                       >
                         <div>
-                          <div className="font-bold text-slate-900">
+                          <div className="font-bold text-[#1F0B22]">
                             {b.userName} · {b.venueName}
                           </div>
                           <div className="text-[11px] text-slate-500">
-                            {b.requestedDate} · {b.peopleCount} أفراد
+                            {b.requestedDate} · {b.peopleCount} {t('أفراد', 'guests')}
                           </div>
                         </div>
                         <div className="flex gap-1.5 shrink-0">
@@ -826,7 +1095,7 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                             }
                             className="min-h-[34px] px-2.5 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer"
                           >
-                            اعتماد
+                            {t('اعتماد', 'Approve')}
                           </button>
                           <button
                             type="button"
@@ -834,9 +1103,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                               authUser &&
                               decideBenefitBooking(b.bookingId, 'rejected', authUser.uid)
                             }
-                            className="min-h-[34px] px-2.5 rounded-lg border border-slate-300 text-red-600 text-[11px] font-semibold cursor-pointer"
+                            className="min-h-[34px] px-2.5 rounded-lg border border-[#ECE4E8] text-red-600 text-[11px] font-semibold cursor-pointer"
                           >
-                            رفض
+                            {t('رفض', 'Reject')}
                           </button>
                         </div>
                       </li>
@@ -845,22 +1114,22 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                 )}
               </div>
 
-              <div className="pt-2.5 border-t border-slate-100">
-                <h3 className="text-xs font-bold text-slate-900 mb-2">
-                  طلبات الخدمات اللوجستية ({openLogistics.length})
+              <div className="pt-2.5 border-t border-[#ECE4E8]">
+                <h3 className="text-xs font-bold text-[#1F0B22] mb-2">
+                  {t(`طلبات باسط للأعمال واللوجستيات (${openLogistics.length})`, `B2B & Logistics Inquiries (${openLogistics.length})`)}
                 </h3>
                 {openLogistics.length === 0 ? (
-                  <p className="text-xs text-slate-500">لا توجد طلبات لوجستية جديدة.</p>
+                  <p className="text-xs text-slate-500">{t('لا توجد طلبات لوجستية جديدة.', 'No open inquiries.')}</p>
                 ) : (
                   <ul className="space-y-2">
                     {openLogistics.map((inq) => (
                       <li
                         key={inq.inquiryId}
-                        className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs"
+                        className="p-2.5 rounded-lg bg-white border border-[#ECE4E8] flex items-center justify-between gap-2 text-xs"
                       >
                         <div className="min-w-0">
-                          <div className="font-bold text-slate-900 truncate">
-                            {inq.organizationName} ({inq.guestCount} فرد)
+                          <div className="font-bold text-[#1F0B22] truncate">
+                            {inq.organizationName} ({inq.guestCount})
                           </div>
                           <div className="text-[11px] text-slate-500">
                             {inq.serviceKey} · {inq.status}
@@ -876,9 +1145,9 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                               authUser.uid,
                             )
                           }
-                          className="min-h-[34px] px-2.5 rounded-lg bg-[#4F2487] text-white text-[11px] font-semibold cursor-pointer shrink-0"
+                          className="min-h-[34px] px-2.5 rounded-lg bg-[#3B123F] text-white text-[11px] font-semibold cursor-pointer shrink-0"
                         >
-                          {inq.status === 'new' ? 'بدء المراجعة' : 'إصدار عرض سعر'}
+                          {inq.status === 'new' ? t('بدء المراجعة', 'Review') : t('إصدار عرض سعر', 'Quote')}
                         </button>
                       </li>
                     ))}
@@ -887,23 +1156,23 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
               </div>
             </div>
 
-            {/* Charity & Kaffarah Execution Proof Verification (Proof >= 8 chars rule enforced) */}
-            <div className="lg:col-span-2 border border-slate-200 rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Charity & Kaffarah Execution Proof Verification */}
+            <div className="lg:col-span-2 border border-[#ECE4E8] rounded-xl p-4 grid grid-cols-1 md:grid-cols-2 gap-4 bg-[#FFFEFC]/60">
               <div>
-                <h3 className="text-xs font-bold text-slate-900 mb-2">
-                  توثيق مساهمات اعمل الخير ({unverifiedCharity.length})
+                <h3 className="text-xs font-bold text-[#1F0B22] mb-2">
+                  {t(`توثيق مساهمات اعمل الخير (${unverifiedCharity.length})`, `Charity Verification (${unverifiedCharity.length})`)}
                 </h3>
                 {unverifiedCharity.length === 0 ? (
-                  <p className="text-xs text-slate-500">كل مساهمات الخير موثقة.</p>
+                  <p className="text-xs text-slate-500">{t('كل مساهمات الخير موثقة.', 'All charity contributions verified.')}</p>
                 ) : (
                   <ul className="space-y-2">
                     {unverifiedCharity.map((c) => (
                       <li
                         key={c.contributionId}
-                        className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2 text-xs"
+                        className="p-2.5 rounded-lg bg-white border border-[#ECE4E8] space-y-2 text-xs"
                       >
-                        <div className="font-bold text-slate-900">
-                          {c.contributorName} · {c.initiativeTitle} ({c.pledgeAmountEGP} ج.م)
+                        <div className="font-bold text-[#1F0B22]">
+                          {c.contributorName} · {c.initiativeTitle} ({c.pledgeAmountEGP} EGP)
                         </div>
                         <div className="flex gap-1.5">
                           <input
@@ -915,15 +1184,15 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                                 [c.contributionId]: e.target.value,
                               }))
                             }
-                            placeholder="رابط أو مرجع إثبات التنفيذ (8 أحرف فأكثر)"
-                            className="flex-1 min-h-[36px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
+                            placeholder={t('مرجع إثبات التنفيذ (8+ أحرف)', 'Proof ref (8+ chars)')}
+                            className="flex-1 min-h-[36px] px-2.5 text-xs bg-white border border-[#ECE4E8] rounded-lg"
                           />
                           <button
                             type="button"
                             onClick={() => {
                               const proof = (charityProofMap[c.contributionId] || '').trim();
                               if (proof.length < 8) {
-                                setAdminMsg('ملاحظة: رابط أو مرجع الإثبات يجب أن يكون 8 أحرف على الأقل وفق قواعد الأمان.');
+                                setAdminMsg(t('مرجع الإثبات يجب أن يكون 8 أحرف على الأقل.', 'Proof ref must be at least 8 chars.'));
                                 return;
                               }
                               if (authUser) {
@@ -936,7 +1205,7 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                             }}
                             className="min-h-[36px] px-3 rounded-lg bg-emerald-600 text-white text-[11px] font-semibold cursor-pointer shrink-0"
                           >
-                            توثيق
+                            {t('توثيق', 'Verify')}
                           </button>
                         </div>
                       </li>
@@ -946,20 +1215,20 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
               </div>
 
               <div>
-                <h3 className="text-xs font-bold text-slate-900 mb-2">
-                  توثيق تنفيذ كفارة اليمين ({openKaffarah.length})
+                <h3 className="text-xs font-bold text-[#1F0B22] mb-2">
+                  {t(`توثيق تنفيذ كفارة اليمين (${openKaffarah.length})`, `Kaffarah Execution Proof (${openKaffarah.length})`)}
                 </h3>
                 {openKaffarah.length === 0 ? (
-                  <p className="text-xs text-slate-500">لا توجد طلبات كفارة قيد التنفيذ.</p>
+                  <p className="text-xs text-slate-500">{t('لا توجد طلبات كفارة قيد التنفيذ.', 'No pending Kaffarah orders.')}</p>
                 ) : (
                   <ul className="space-y-2">
                     {openKaffarah.map((k) => (
                       <li
                         key={k.orderId}
-                        className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 space-y-2 text-xs"
+                        className="p-2.5 rounded-lg bg-white border border-[#ECE4E8] space-y-2 text-xs"
                       >
-                        <div className="font-bold text-slate-900">
-                          {k.donorName} · {k.kaffarahCount} كفارة ({k.totalMeals} وجبة · {k.totalAmountEGP} ج.م)
+                        <div className="font-bold text-[#1F0B22]">
+                          {k.donorName} · {k.kaffarahCount} × ({k.totalMeals} {t('وجبة', 'meals')} · {k.totalAmountEGP} EGP)
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           <input
@@ -971,15 +1240,15 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                                 [k.orderId]: e.target.value,
                               }))
                             }
-                            placeholder="مرجع / رابط إثبات التوزيع الشرعي (8+ أحرف)"
-                            className="flex-1 min-h-[36px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
+                            placeholder={t('مرجع التوزيع الشرعي (8+ أحرف)', 'Distribution proof ref (8+ chars)')}
+                            className="flex-1 min-h-[36px] px-2.5 text-xs bg-white border border-[#ECE4E8] rounded-lg"
                           />
                           <button
                             type="button"
                             onClick={() => {
                               const proof = (kaffarahProofMap[k.orderId] || '').trim();
                               if (proof.length < 8) {
-                                setAdminMsg('ملاحظة: مرجع التوثيق الشرعي يجب أن لا يقل عن 8 أحرف.');
+                                setAdminMsg(t('مرجع التوثيق يجب أن لا يقل عن 8 أحرف.', 'Proof ref must be at least 8 chars.'));
                                 return;
                               }
                               if (authUser) {
@@ -993,7 +1262,7 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
                             }}
                             className="min-h-[36px] px-3 rounded-lg bg-amber-700 text-white text-[11px] font-semibold cursor-pointer shrink-0"
                           >
-                            تم التنفيذ والتوثيق
+                            {t('تم التنفيذ والتوثيق', 'Verify Execution')}
                           </button>
                         </div>
                       </li>
@@ -1005,20 +1274,22 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
           </div>
 
           {/* Immutable Audit Logs */}
-          <div className="px-5 py-4 border-t border-slate-200 bg-slate-50/70">
-            <h3 className="text-xs font-bold text-slate-900 mb-2">
-              سجل التدقيق غير القابل للتعديل أو الحذف ({auditLogs.length})
+          <div className="px-5 py-4 border-t border-[#ECE4E8] bg-[#FFFEFC]">
+            <h3 className="text-xs font-bold text-[#1F0B22] mb-2">
+              {t(`سجل التدقيق غير القابل للتعديل أو الحذف (${auditLogs.length})`, `Immutable Audit Log (${auditLogs.length})`)}
             </h3>
             {auditLogs.length === 0 ? (
-              <p className="text-xs text-slate-500">لا توجد قيود تدقيق مسجلة بعد.</p>
+              <p className="text-xs text-slate-500">{t('لا توجد قيود تدقيق مسجلة بعد.', 'No audit logs recorded yet.')}</p>
             ) : (
               <ul className="space-y-1.5 max-h-48 overflow-y-auto text-xs">
-                {auditLogs.slice(0, 10).map((log) => (
+                {auditLogs.slice(0, 12).map((log) => (
                   <li
                     key={log.logId}
-                    className="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-slate-200/70 last:border-0"
+                    className="flex flex-wrap items-center justify-between gap-2 py-1 border-b border-[#ECE4E8]/70 last:border-0"
                   >
-                    <span className="font-semibold text-slate-800">{log.actionAr}</span>
+                    <span className="font-semibold text-[#1F0B22]">
+                      {isEn ? log.actionEn : log.actionAr}
+                    </span>
                     <span className="font-mono text-[11px] text-slate-500">
                       {log.targetCollection}/{log.targetId}
                     </span>
@@ -1030,228 +1301,20 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
         </section>
       )}
 
-      {/* Bootstrapped Owner-Only Financial Vault */}
-      {isBootAdmin && (
-        <section className="bg-white border border-purple-200 rounded-2xl overflow-hidden">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <Wallet className="w-5 h-5 text-[#4F2487] shrink-0" />
-              <div>
-                <h2 className="text-base font-bold text-slate-900">
-                  خزينة المالك المالية المركزية (Owner Financial Vault)
-                </h2>
-                <p className="text-xs text-slate-500">
-                  معزولة بصلاحية isBootstrappedAdmin() — ترحيل فوري مع سجل تدقيق غير قابل للتعديل
-                </p>
-              </div>
-            </div>
-            <div className="text-left tabular-nums">
-              <div className="text-[11px] text-slate-500">إجمالي السيولة</div>
-              <div className="text-base font-bold text-[#4F2487]">
-                {ownerAccounts
-                  .reduce((sum, a) => sum + (a.balanceEGP || 0), 0)
-                  .toLocaleString('en-US')}{' '}
-                ج.م
-              </div>
-            </div>
-          </div>
-
-          <div className="p-5 space-y-5">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {ownerAccounts.map((acc) => (
-                <div
-                  key={acc.accountId}
-                  className="p-3.5 rounded-xl bg-slate-50 border border-slate-200"
-                >
-                  <div className="text-xs text-slate-500">{acc.labelAr}</div>
-                  <div className="mt-1 text-lg font-bold text-slate-900 tabular-nums">
-                    {acc.balanceEGP.toLocaleString('en-US')} ج.م
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <form
-              onSubmit={handleRecordFinancialEntry}
-              className="p-4 rounded-xl bg-slate-50 border border-slate-200 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 items-end"
-            >
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  نوع القيد
-                </label>
-                <select
-                  value={finDirection}
-                  onChange={(e) =>
-                    setFinDirection(e.target.value as 'inflow' | 'outflow')
-                  }
-                  className="w-full min-h-[40px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
-                >
-                  <option value="inflow">إيداع / تحصيل</option>
-                  <option value="outflow">مصروف / سحب</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  القناة المالية
-                </label>
-                <select
-                  value={finChannel}
-                  onChange={(e) =>
-                    setFinChannel(
-                      e.target.value as OwnerFinancialAccount['accountId'],
-                    )
-                  }
-                  className="w-full min-h-[40px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
-                >
-                  <option value="bank">البنك</option>
-                  <option value="e_wallet">محفظة إلكترونية</option>
-                  <option value="treasury">الخزينة النقدية</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  الجهة / المستفيد
-                </label>
-                <input
-                  type="text"
-                  value={finSource}
-                  onChange={(e) => setFinSource(e.target.value)}
-                  placeholder="مثال: شركة ها-بي إيجيبت"
-                  className="w-full min-h-[40px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                  البيان
-                </label>
-                <input
-                  type="text"
-                  value={finPurpose}
-                  onChange={(e) => setFinPurpose(e.target.value)}
-                  placeholder="تسوية وجبات أسبوعية"
-                  className="w-full min-h-[40px] px-2.5 text-xs bg-white border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    المبلغ
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    value={finGross}
-                    onChange={(e) => setFinGross(e.target.value)}
-                    className="w-full min-h-[40px] px-2 text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
-                  />
-                </div>
-                {finDirection === 'inflow' ? (
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      عمولة %
-                    </label>
-                    <input
-                      type="number"
-                      min={0}
-                      max={100}
-                      value={finCommPct}
-                      onChange={(e) => setFinCommPct(e.target.value)}
-                      className="w-full min-h-[40px] px-2 text-xs bg-white border border-slate-300 rounded-lg tabular-nums"
-                    />
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                      التصنيف
-                    </label>
-                    <select
-                      value={finCategory}
-                      onChange={(e) =>
-                        setFinCategory(
-                          e.target.value as OwnerFinancialEntry['expenseCategory'],
-                        )
-                      }
-                      className="w-full min-h-[40px] px-2 text-xs bg-white border border-slate-300 rounded-lg"
-                    >
-                      <option value="raw_materials">خامات</option>
-                      <option value="salaries">رواتب</option>
-                      <option value="logistics">لوجستيات</option>
-                      <option value="commissions">عمولات</option>
-                      <option value="marketing">تسويق</option>
-                      <option value="other">أخرى</option>
-                    </select>
-                  </div>
-                )}
-              </div>
-              <button
-                type="submit"
-                disabled={finBusy}
-                className="min-h-[40px] px-4 rounded-lg bg-[#4F2487] text-white text-xs font-semibold hover:bg-[#3f1c6d] disabled:opacity-50 cursor-pointer"
-              >
-                {finBusy ? 'جاري الترحيل...' : 'ترحيل القيد'}
-              </button>
-              {finMsg && (
-                <p className="sm:col-span-2 lg:col-span-6 text-xs font-semibold text-emerald-700">
-                  {finMsg}
-                </p>
-              )}
-            </form>
-
-            {ownerEntries.length > 0 && (
-              <div className="overflow-x-auto">
-                <table className="w-full text-right text-xs border-collapse">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-slate-500">
-                      <th className="py-2 pl-3">التاريخ</th>
-                      <th className="py-2 pl-3">الاتجاه</th>
-                      <th className="py-2 pl-3">الجهة</th>
-                      <th className="py-2 pl-3">البيان</th>
-                      <th className="py-2 pl-3">القناة</th>
-                      <th className="py-2">الصافي</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 tabular-nums">
-                    {ownerEntries.slice(0, 10).map((en) => (
-                      <tr key={en.entryId}>
-                        <td className="py-2 pl-3 font-mono">{en.entryDate}</td>
-                        <td className="py-2 pl-3 font-semibold">
-                          <span
-                            className={
-                              en.direction === 'inflow'
-                                ? 'text-emerald-700'
-                                : 'text-red-600'
-                            }
-                          >
-                            {en.direction === 'inflow' ? 'إيداع' : 'مصروف'}
-                          </span>
-                        </td>
-                        <td className="py-2 pl-3">{en.sourceOrBeneficiary}</td>
-                        <td className="py-2 pl-3 text-slate-600">{en.purpose}</td>
-                        <td className="py-2 pl-3">{en.channel}</td>
-                        <td className="py-2 font-bold">
-                          {en.netEGP.toLocaleString('en-US')} ج.م
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </section>
-      )}
-
-      {/* Phase 2 Live Red-Team Security Suite */}
-      <section className="bg-white border border-slate-200/90 rounded-2xl overflow-hidden">
-        <div className="px-5 py-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      {/* Live Red-Team Security Suite */}
+      <section className="bg-[#FFFFFF] border border-[#ECE4E8] rounded-2xl overflow-hidden">
+        <div className="px-5 py-4 border-b border-[#ECE4E8] flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div className="flex items-start gap-2.5">
-            <ShieldCheck className="w-5 h-5 text-[#4F2487] shrink-0 mt-0.5" />
+            <ShieldCheck className="w-5 h-5 text-[#3B123F] shrink-0 mt-0.5" />
             <div>
-              <h2 className="text-base font-bold text-slate-900">
-                فحص الفريق الأحمر الحي — الاثنا عشر حمولة معادية (Phase 2)
+              <h2 className="text-base font-bold text-[#1F0B22]">
+                {t('فحص الأمان والعزل الحي أمام قواعد Firestore', 'Live Firestore Security & Isolation Probes (12)')}
               </h2>
               <p className="text-xs text-slate-500 mt-0.5">
-                تنفيذ فعلي لـ 12 اختبار اختراق ومحاولات تجاوز الصلاحيات مباشرة أمام قواعد Firestore المنشورة
+                {t(
+                  'تنفيذ فعلي لـ 12 اختبار اختراق ومحاولات تجاوز الصلاحيات مباشرة أمام قواعد الأمان المنشورة',
+                  'Executes 12 live permission-boundary probes against deployed Firestore rules',
+                )}
               </p>
             </div>
           </div>
@@ -1260,10 +1323,12 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
             type="button"
             onClick={handleRunRedTeam}
             disabled={runningProbes}
-            className="min-h-[44px] px-4 inline-flex items-center justify-center gap-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#4F2487] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+            className="min-h-[44px] px-4 inline-flex items-center justify-center gap-2 rounded-xl bg-[#1F0B22] text-white text-xs font-semibold hover:bg-[#3B123F] disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap shrink-0"
           >
             <Play className="w-3.5 h-3.5" />
-            {runningProbes ? 'جاري الاختبار الحي...' : 'تشغيل اختبارات الفريق الأحمر (12)'}
+            {runningProbes
+              ? t('جاري الاختبار الحي...', 'Running Live Probes...')
+              : t('تشغيل اختبارات الحماية (12)', 'Run 12 Security Probes')}
           </button>
         </div>
 
@@ -1283,17 +1348,17 @@ export const GovernanceSecurityTab: React.FC<GovernanceSecurityTabProps> = ({
             <div>12. التلاعب بسجل التدقيق</div>
           </div>
         ) : (
-          <ul className="divide-y divide-slate-100">
+          <ul className="divide-y divide-[#ECE4E8]">
             {probeResults.map((res) => (
               <li
                 key={res.id}
                 className="px-5 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs"
               >
                 <div>
-                  <span className="font-bold text-slate-900">
+                  <span className="font-bold text-[#1F0B22]">
                     {res.id}. {res.titleAr}
                   </span>
-                  <span className="text-slate-500 mr-2 font-mono">{res.target}</span>
+                  <span className="text-slate-500 mx-2 font-mono">{res.target}</span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span

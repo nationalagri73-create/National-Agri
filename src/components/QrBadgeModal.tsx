@@ -41,7 +41,7 @@ export const QrBadgeModal: React.FC<QrBadgeModalProps> = ({
         <div className="w-10 h-1.5 bg-slate-200 rounded-full mx-auto mb-4 sm:hidden" />
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2 min-w-0">
-            <QrCode className="w-5 h-5 text-[#4F2487] shrink-0" />
+            <QrCode className="w-5 h-5 text-[#3B123F] shrink-0" />
             <h3 className="text-base font-bold text-slate-900 truncate">{title}</h3>
           </div>
           <button
@@ -77,7 +77,7 @@ export const QrBadgeModal: React.FC<QrBadgeModalProps> = ({
         <button
           type="button"
           onClick={onClose}
-          className="mt-5 w-full min-h-[48px] rounded-xl bg-[#4F2487] text-white text-sm font-semibold hover:bg-[#3f1c6d] transition-colors cursor-pointer"
+          className="mt-5 w-full min-h-[48px] rounded-xl bg-[#3B123F] text-white text-sm font-semibold hover:bg-[#501C5A] transition-colors cursor-pointer"
         >
           إغلاق
         </button>

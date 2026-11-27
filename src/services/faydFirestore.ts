@@ -16,7 +16,11 @@ import {
   OperationType,
 } from '../lib/firebase';
 import {
+  BasitCard,
+  BasitSectorKey,
   BenefitBooking,
+  BusinessSectorKey,
+  CanonicalBasitRole,
   CatalogItem,
   CommercialOrder,
   CommissionRule,
@@ -25,17 +29,24 @@ import {
   DeliveryRequest,
   DeliveryStatus,
   EntityType,
+  FactoryComplaint,
   FaydOpportunity,
+  HealthyPlan,
   LogisticsServiceKey,
+  MarketplaceRfq,
   OnboardingApplication,
   OrderStatus,
+  OwnerClientReceivable,
   OwnerFinancialAccount,
   OwnerFinancialEntry,
+  OwnerInvoice,
+  OwnerSupplierPayable,
   PaymentProviderId,
   SubscriptionPlan,
   UsufructProposal,
   UserPrivateProfile,
   UserProfile,
+  UserRole,
   VipDirectOrderItem,
   VipOrderChannel,
   VipOrderStatus,
@@ -48,6 +59,8 @@ import {
   SEED_CATALOG_ITEMS,
   SEED_CHARITY_INITIATIVES,
   SEED_ENTERTAINMENT_BENEFITS,
+  SEED_FACTORY_EMPLOYEES,
+  SEED_HEALTHY_PLANS,
   SEED_OFFERS_ADS,
   SEED_OPPORTUNITIES,
   SEED_OWNER_ACCOUNTS,
@@ -56,44 +69,104 @@ import {
   SEED_STOREFRONTS,
 } from '../data/seedDefaults';
 
+async function retryTransientOffline<T>(
+  fn: () => Promise<T>,
+  retries = 2,
+  delayMs = 900,
+): Promise<T> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+      const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      const isTransient =
+        msg.includes('the client is offline') ||
+        msg.includes('unavailable') ||
+        msg.includes('network');
+      if (!isTransient || attempt === retries) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs * (attempt + 1)));
+    }
+  }
+  throw lastError;
+}
+
 export async function ensureUserProfileAndVault(params: {
   uid: string;
   displayName: string;
   email: string;
-}): Promise<void> {
-  const { uid, displayName, email } = params;
+  phone?: string;
+}): Promise<UserProfile> {
+  const { uid, displayName, email, phone } = params;
   const userRef = doc(db, 'users', uid);
   const privateRef = doc(db, 'users', uid, 'private_profile', 'main');
   const isBootAdmin = isBootstrappedAdminEmail(email);
 
   try {
-    const snap = await getDoc(userRef);
-    if (!snap.exists()) {
-      const safeName = clampStr(displayName || email.split('@')[0] || 'BASIT User', 120);
-      await setDoc(userRef, {
-        uid,
-        displayName: safeName.length >= 2 ? safeName : 'BASIT User',
-        role: isBootAdmin ? 'central_super_admin' : 'customer',
-        status: 'active',
-        countryCode: 'EG' as CountryCode,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+    return await retryTransientOffline(async () => {
+      const snap = await getDoc(userRef);
+      let profileData: UserProfile;
 
-    const privSnap = await getDoc(privateRef);
-    if (!privSnap.exists()) {
-      await setDoc(privateRef, {
-        uid,
-        email: clampStr(email, 160),
-        phone: '',
-        nationalOrTaxId: '',
-        address: '',
-        updatedAt: serverTimestamp(),
-      });
-    }
+      if (!snap.exists()) {
+        const fallbackLabel =
+          displayName ||
+          (email ? email.split('@')[0] : '') ||
+          phone ||
+          'BASIT User';
+        const safeName = clampStr(fallbackLabel, 120);
+        const newProfile: UserProfile = {
+          uid,
+          displayName: safeName.length >= 2 ? safeName : 'BASIT User',
+          role: isBootAdmin ? 'platform_owner' : 'client',
+          status: 'active',
+          countryCode: 'EG' as CountryCode,
+        };
+        await setDoc(userRef, {
+          ...newProfile,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+        profileData = newProfile;
+      } else {
+        profileData = snap.data() as UserProfile;
+      }
+
+      const privSnap = await getDoc(privateRef);
+      if (!privSnap.exists()) {
+        const safeEmail = clampStr(
+          email || (phone ? `${uid.slice(0, 12)}@phone.basit.app` : `${uid.slice(0, 12)}@basit.app`),
+          160,
+        );
+        await setDoc(privateRef, {
+          uid,
+          email: safeEmail,
+          phone: clampStr(phone ?? '', 32),
+          nationalOrTaxId: '',
+          address: '',
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      return profileData;
+    });
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `users/${uid}`);
+    console.warn('EnsureUserProfile offline fallback triggered:', error);
+    const fallbackLabel =
+      displayName ||
+      (email ? email.split('@')[0] : '') ||
+      phone ||
+      'BASIT User';
+    const safeName = clampStr(fallbackLabel, 120);
+    return {
+      uid,
+      displayName: safeName.length >= 2 ? safeName : 'BASIT User',
+      role: isBootAdmin ? 'platform_owner' : 'client',
+      status: 'active',
+      countryCode: 'EG' as CountryCode,
+    };
   }
 }
 
@@ -117,6 +190,53 @@ export async function updateUserPrivateProfile(
       OperationType.WRITE,
       `users/${uid}/private_profile/main`,
     );
+  }
+}
+
+export async function updateUserRoleAndTenantByAdmin(params: {
+  targetUid: string;
+  role: CanonicalBasitRole | UserRole;
+  tenantId: string;
+  status: 'active' | 'pending' | 'suspended';
+  adminUid: string;
+}): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'users', params.targetUid), {
+      role: params.role,
+      tenantId: clampStr(params.tenantId, 128),
+      status: params.status,
+      updatedAt: serverTimestamp(),
+    });
+
+    const adminRef = doc(db, 'admins', params.targetUid);
+    if (params.role === 'platform_owner' || params.role === 'system_admin') {
+      await setDoc(adminRef, {
+        uid: params.targetUid,
+        adminLevel: params.role,
+        label: params.role === 'platform_owner' ? 'Platform Owner' : 'System Admin',
+        grantedBy: params.adminUid,
+        active: params.status === 'active',
+        createdAt: serverTimestamp(),
+      });
+    } else {
+      const existingAdmin = await getDoc(adminRef);
+      if (existingAdmin.exists()) {
+        await updateDoc(adminRef, {
+          active: false,
+        });
+      }
+    }
+
+    await writeAuditLog({
+      actorUid: params.adminUid,
+      actionAr: `تحديث صلاحية المستخدم ${params.targetUid} إلى ${params.role}`,
+      actionEn: `Updated user ${params.targetUid} role to ${params.role}`,
+      targetCollection: 'users',
+      targetId: params.targetUid,
+      details: params.tenantId ? `tenantId=${params.tenantId}` : '',
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `users/${params.targetUid}`);
   }
 }
 
@@ -158,6 +278,7 @@ export async function seedFaydPlatformData(
       offerSnaps,
       benefitSnaps,
       charitySnaps,
+      employeeSnaps,
       kaffarahSnap,
       settingsSnap,
       ownerAccountSnaps,
@@ -174,6 +295,11 @@ export async function seedFaydPlatformData(
       Promise.all(
         SEED_CHARITY_INITIATIVES.map((c) =>
           getDoc(doc(db, 'charity_initiatives', c.initiativeId)),
+        ),
+      ),
+      Promise.all(
+        SEED_FACTORY_EMPLOYEES.map((emp) =>
+          getDoc(doc(db, 'factory_employees', emp.empId)),
         ),
       ),
       getDoc(doc(db, 'kaffarah_rules', 'official')),
@@ -201,6 +327,13 @@ export async function seedFaydPlatformData(
       });
     }
 
+    for (const hp of SEED_HEALTHY_PLANS) {
+      batch1.set(doc(db, 'healthy_plans', hp.planId), {
+        ...hp,
+        updatedAt: serverTimestamp(),
+      });
+    }
+
     for (const gw of SEED_PAYMENT_GATEWAYS) {
       batch1.set(doc(db, 'payment_gateway_configs', gw.providerId), {
         ...gw,
@@ -217,12 +350,12 @@ export async function seedFaydPlatformData(
         defaultLanguage: 'ar',
         defaultCountryCode: 'EG',
         enabledCountriesCsv: 'EG,AE,QA,OM,GB',
-        cmsPrimaryPurple: '#4F2487',
-        cmsAccentYellow: '#FACC15',
-        cmsHeroBadgeAr: 'باسط | BASIT — الشركة الوطنية اللوجستية',
-        cmsHeroTitleAr: 'منظومة باسط وفيض الوطنية للإعاشة والتوصيل والانتفاع',
+        cmsPrimaryPurple: '#3B123F',
+        cmsAccentYellow: '#D4AF37',
+        cmsHeroBadgeAr: 'BASIT | باسط — الشركة الوطنية اللوجستية',
+        cmsHeroTitleAr: 'منصة باسط المتكاملة للأغذية والتوريد وإدارة المصانع',
         cmsHeroSubtitleAr:
-          'متاجر ومطابخ مركزية معزولة، نقطة موظفي ها-بي، المزايا، الخير والكفارة، وخدمات التموين اللوجستي.',
+          'المطابخ المركزية، قطاع الأعمال، كروت باسط، الوجبات الصحية، بوابة المصانع المستقلة، والإدارة المالية المركزية.',
         updatedByUid: adminUid,
         updatedAt: serverTimestamp(),
       });
@@ -236,7 +369,23 @@ export async function seedFaydPlatformData(
 
     SEED_STOREFRONTS.forEach((sf, idx) => {
       batch1.set(doc(db, 'public_storefronts', sf.tenantId), {
-        ...sf,
+        tenantId: sf.tenantId,
+        name: sf.name,
+        nameEn: sf.nameEn || sf.name,
+        entityType: sf.entityType,
+        tenantKind: sf.tenantKind || 'central_kitchen',
+        countryCode: sf.countryCode,
+        city: sf.city,
+        primaryColor: sf.primaryColor || '#3B123F',
+        accentColor: sf.accentColor || '#D4AF37',
+        logoUrl: sf.logoUrl || '',
+        specialtiesAr: sf.specialtiesAr || '',
+        specialtiesEn: sf.specialtiesEn || '',
+        capacityMealsPerDay: sf.capacityMealsPerDay ?? 0,
+        serviceAreasCsv: sf.serviceAreasCsv || '',
+        averageRating: sf.averageRating ?? 4.8,
+        ratingCount: sf.ratingCount ?? 0,
+        isActive: true,
         updatedAt: serverTimestamp(),
       });
 
@@ -245,9 +394,20 @@ export async function seedFaydPlatformData(
       if (tSnap.exists()) {
         batch1.update(tenantRef, {
           name: sf.name,
+          nameEn: sf.nameEn || sf.name,
           entityType: sf.entityType,
+          tenantKind: sf.tenantKind || 'central_kitchen',
           countryCode: sf.countryCode,
           city: sf.city,
+          primaryColor: sf.primaryColor || '#3B123F',
+          accentColor: sf.accentColor || '#D4AF37',
+          logoUrl: sf.logoUrl || '',
+          specialtiesAr: sf.specialtiesAr || '',
+          specialtiesEn: sf.specialtiesEn || '',
+          capacityMealsPerDay: sf.capacityMealsPerDay ?? 0,
+          serviceAreasCsv: sf.serviceAreasCsv || '',
+          averageRating: sf.averageRating ?? 4.8,
+          ratingCount: sf.ratingCount ?? 0,
           status: 'active',
           contractStatus: 'contracted',
           updatedAt: serverTimestamp(),
@@ -257,7 +417,9 @@ export async function seedFaydPlatformData(
           tenantId: sf.tenantId,
           ownerUid: adminUid,
           name: sf.name,
+          nameEn: sf.nameEn || sf.name,
           entityType: sf.entityType,
+          tenantKind: sf.tenantKind || 'central_kitchen',
           countryCode: sf.countryCode,
           city: sf.city,
           commercialRegRef: `REG-${sf.tenantId.slice(-6).toUpperCase()}`,
@@ -266,6 +428,15 @@ export async function seedFaydPlatformData(
           deliveryEnabled: true,
           status: 'active',
           contractStatus: 'contracted',
+          primaryColor: sf.primaryColor || '#3B123F',
+          accentColor: sf.accentColor || '#D4AF37',
+          logoUrl: sf.logoUrl || '',
+          specialtiesAr: sf.specialtiesAr || '',
+          specialtiesEn: sf.specialtiesEn || '',
+          capacityMealsPerDay: sf.capacityMealsPerDay ?? 0,
+          serviceAreasCsv: sf.serviceAreasCsv || '',
+          averageRating: sf.averageRating ?? 4.8,
+          ratingCount: sf.ratingCount ?? 0,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -295,6 +466,29 @@ export async function seedFaydPlatformData(
       }
     });
 
+    SEED_FACTORY_EMPLOYEES.forEach((emp, idx) => {
+      const eSnap = employeeSnaps[idx];
+      const empRef = doc(db, 'factory_employees', emp.empId);
+      if (eSnap.exists()) {
+        batch1.update(empRef, {
+          nameAr: emp.nameAr,
+          nameEn: emp.nameEn,
+          departmentAr: emp.departmentAr,
+          jobTitle: emp.jobTitle,
+          shift: emp.shift,
+          monthlyCardLimitEGP: emp.monthlyCardLimitEGP,
+          isActive: emp.isActive,
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        batch1.set(empRef, {
+          ...emp,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+    });
+
     const oppsNeedingApprovalUpdate: string[] = [];
     SEED_OPPORTUNITIES.forEach((opp, idx) => {
       const oSnap = oppSnaps[idx];
@@ -309,7 +503,6 @@ export async function seedFaydPlatformData(
           updatedAt: serverTimestamp(),
         });
       } else {
-        // firestore.rules allow create enforces approvalStatus == 'pending_admin' on create
         batch1.set(oppRef, {
           ...opp,
           ownerUid: adminUid,
@@ -416,12 +609,12 @@ export async function seedFaydPlatformData(
 
     await writeAuditLog({
       actorUid: adminUid,
-      actionAr: 'تهيئة البيانات الأساسية لمنظومة باسط وفيض',
-      actionEn: 'Seeded BASIT/FAYD Phase 2 baseline collections',
+      actionAr: 'تهيئة البيانات الأساسية لمنصة BASIT | باسط',
+      actionEn: 'Seeded BASIT ecosystem baseline collections',
       targetCollection: 'tenants',
       targetId: 'seed_batch',
       details:
-        'Storefronts, tenants, catalog_items, opportunities, offers_ads, benefits, charity, kaffarah, gateways, plans',
+        'Storefronts, tenants, factory_employees, healthy_plans, catalog_items, opportunities, offers_ads, benefits, charity, kaffarah, gateways, plans',
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'batch_seed');
@@ -532,6 +725,362 @@ export async function createCatalogItemRecord(params: {
   }
 }
 
+// =========================================================================
+// MARKETPLACE RFQs & REVIEWS
+// =========================================================================
+export async function createMarketplaceRfqRecord(params: {
+  requesterUid: string;
+  requesterOrgName: string;
+  phone: string;
+  targetTenantId: string;
+  targetMerchantOwnerUid: string;
+  targetName: string;
+  dailyQty: number;
+  frequency: MarketplaceRfq['frequency'];
+  city: string;
+  details: string;
+}): Promise<string> {
+  const rfqId = makeSafeId('rfq');
+  const safePhone = clampStr(params.phone, 32);
+  try {
+    await setDoc(doc(db, 'marketplace_rfqs', rfqId), {
+      rfqId,
+      requesterUid: params.requesterUid,
+      requesterOrgName: clampStr(params.requesterOrgName, 140),
+      phone: safePhone.length >= 6 ? safePhone : '+201000000000',
+      targetTenantId: params.targetTenantId,
+      targetMerchantOwnerUid: params.targetMerchantOwnerUid || 'seed_admin',
+      targetName: clampStr(params.targetName, 140),
+      dailyQty: Math.max(1, Math.min(1000000, Math.round(params.dailyQty))),
+      frequency: params.frequency,
+      city: clampStr(params.city, 80),
+      details: clampStr(params.details, 600),
+      quotedPriceEGP: 0,
+      merchantNote: '',
+      status: 'open',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return rfqId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `marketplace_rfqs/${rfqId}`);
+  }
+}
+
+export async function respondToMarketplaceRfq(params: {
+  rfqId: string;
+  status: 'quoted' | 'accepted' | 'declined';
+  quotedPriceEGP?: number;
+  merchantNote?: string;
+}): Promise<void> {
+  try {
+    const patch: Record<string, unknown> = {
+      status: params.status,
+      updatedAt: serverTimestamp(),
+    };
+    if (params.status === 'quoted' || params.status === 'declined') {
+      if (typeof params.quotedPriceEGP === 'number') {
+        patch.quotedPriceEGP = Math.max(0, Math.round(params.quotedPriceEGP));
+      }
+      if (typeof params.merchantNote === 'string') {
+        patch.merchantNote = clampStr(params.merchantNote, 400);
+      }
+    }
+    await updateDoc(doc(db, 'marketplace_rfqs', params.rfqId), patch);
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.UPDATE,
+      `marketplace_rfqs/${params.rfqId}`,
+    );
+  }
+}
+
+export async function createMarketplaceReviewRecord(params: {
+  tenantId: string;
+  authorUid: string;
+  authorName: string;
+  rating: number;
+  comment: string;
+}): Promise<string> {
+  const reviewId = makeSafeId('rev');
+  try {
+    await setDoc(doc(db, 'marketplace_reviews', reviewId), {
+      reviewId,
+      tenantId: params.tenantId,
+      authorUid: params.authorUid,
+      authorName: clampStr(params.authorName || 'عميل باسط', 120),
+      rating: Math.max(1, Math.min(5, Math.round(params.rating))),
+      comment: clampStr(params.comment, 500),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return reviewId;
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `marketplace_reviews/${reviewId}`,
+    );
+  }
+}
+
+// =========================================================================
+// BASIT CARD & VOUCHER REDEMPTIONS
+// =========================================================================
+export async function issueOrActivateBasitCard(params: {
+  ownerUid: string;
+  holderName: string;
+  employeeCode: string;
+  tenantId: string;
+  factoryName: string;
+  monthlyQuotaEGP?: number;
+}): Promise<string> {
+  const cardId = makeSafeId('crd');
+  const today = new Date().toISOString().slice(0, 10);
+  const nextYear = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+  const digits = Math.floor(1000 + Math.random() * 9000);
+
+  try {
+    await setDoc(doc(db, 'basit_cards', cardId), {
+      cardId,
+      ownerUid: params.ownerUid,
+      holderName: clampStr(params.holderName || 'موظف باسط', 120),
+      employeeCode: clampStr(params.employeeCode || 'EMP-001', 48),
+      tenantId: clampStr(params.tenantId || 'tenant_factory_habe', 128),
+      factoryName: clampStr(params.factoryName || 'مصنع ها-بي للكيماويات', 140),
+      cardNumberMasked: `BASIT •••• ${digits}`,
+      monthlyQuotaEGP: Math.min(3000, Math.max(500, params.monthlyQuotaEGP ?? 1500)),
+      usedAmountEGP: 0,
+      validFrom: today,
+      validTo: nextYear,
+      status: 'active',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return cardId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `basit_cards/${cardId}`);
+  }
+}
+
+export async function redeemBasitCardVoucher(params: {
+  card: BasitCard;
+  vendorName: string;
+  offerTitle: string;
+  amountEGP: number;
+  discountSavedEGP: number;
+}): Promise<string> {
+  const redemptionId = makeSafeId('rdm');
+  const safeAmount = Math.max(1, Math.round(params.amountEGP));
+  const nextUsed = params.card.usedAmountEGP + safeAmount;
+  if (nextUsed > params.card.monthlyQuotaEGP) {
+    throw new Error('الرصيد المتاح في كارت باسط لا يكفي لهذه العملية.');
+  }
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'basit_card_redemptions', redemptionId), {
+    redemptionId,
+    cardId: params.card.cardId,
+    ownerUid: params.card.ownerUid,
+    tenantId: params.card.tenantId,
+    vendorName: clampStr(params.vendorName, 140),
+    offerTitle: clampStr(params.offerTitle, 160),
+    amountEGP: safeAmount,
+    discountSavedEGP: Math.max(0, Math.round(params.discountSavedEGP)),
+    createdAt: serverTimestamp(),
+  });
+
+  batch.update(doc(db, 'basit_cards', params.card.cardId), {
+    usedAmountEGP: nextUsed,
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+    return redemptionId;
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `basit_card_redemptions/${redemptionId}`,
+    );
+  }
+}
+
+export async function updateBasitCardStatus(params: {
+  cardId: string;
+  status: 'active' | 'frozen' | 'expired';
+}): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'basit_cards', params.cardId), {
+      status: params.status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.UPDATE,
+      `basit_cards/${params.cardId}`,
+    );
+  }
+}
+
+// =========================================================================
+// BASIT HEALTHY SUBSCRIPTIONS
+// =========================================================================
+export async function enrollHealthySubscription(params: {
+  subscriberUid: string;
+  subscriberName: string;
+  phone: string;
+  plan: HealthyPlan;
+  orgOrGymName: string;
+  startDate: string;
+  deliveryAddress: string;
+}): Promise<string> {
+  const subId = makeSafeId('hsub');
+  const safePhone = clampStr(params.phone, 32);
+  try {
+    await setDoc(doc(db, 'healthy_subscriptions', subId), {
+      subId,
+      subscriberUid: params.subscriberUid,
+      subscriberName: clampStr(params.subscriberName || 'مشترك صحي', 120),
+      phone: safePhone.length >= 6 ? safePhone : '+201000000000',
+      planId: params.plan.planId,
+      planTitle: clampStr(params.plan.titleAr, 160),
+      targetSegment: params.plan.targetSegment,
+      orgOrGymName: clampStr(params.orgOrGymName, 140),
+      startDate: clampStr(params.startDate || new Date().toISOString().slice(0, 10), 32),
+      deliveryAddress: clampStr(params.deliveryAddress, 240),
+      totalPriceEGP: params.plan.priceEGP,
+      status: 'active',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return subId;
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `healthy_subscriptions/${subId}`,
+    );
+  }
+}
+
+export async function updateHealthySubscriptionStatus(
+  subId: string,
+  status: 'active' | 'paused' | 'completed',
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'healthy_subscriptions', subId), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.UPDATE,
+      `healthy_subscriptions/${subId}`,
+    );
+  }
+}
+
+// =========================================================================
+// FACTORY EMPLOYEES & COMPLAINTS
+// =========================================================================
+export async function createFactoryEmployeeRecord(params: {
+  tenantId: string;
+  employeeCode: string;
+  nameAr: string;
+  nameEn: string;
+  departmentAr: string;
+  jobTitle: string;
+  shift: string;
+  monthlyCardLimitEGP: number;
+}): Promise<string> {
+  const empId = makeSafeId('emp');
+  try {
+    await setDoc(doc(db, 'factory_employees', empId), {
+      empId,
+      tenantId: params.tenantId,
+      employeeCode: clampStr(params.employeeCode, 48),
+      nameAr: clampStr(params.nameAr, 120),
+      nameEn: clampStr(params.nameEn || params.nameAr, 120),
+      departmentAr: clampStr(params.departmentAr, 100),
+      jobTitle: clampStr(params.jobTitle, 100),
+      shift: clampStr(params.shift, 64),
+      monthlyCardLimitEGP: Math.max(0, Math.min(100000, Math.round(params.monthlyCardLimitEGP))),
+      isActive: true,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return empId;
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `factory_employees/${empId}`,
+    );
+  }
+}
+
+export async function createFactoryComplaintRecord(params: {
+  tenantId: string;
+  authorUid: string;
+  authorName: string;
+  employeeCode: string;
+  category: FactoryComplaint['category'];
+  subject: string;
+  details: string;
+}): Promise<string> {
+  const complaintId = makeSafeId('cmp');
+  try {
+    await setDoc(doc(db, 'factory_complaints', complaintId), {
+      complaintId,
+      tenantId: params.tenantId,
+      authorUid: params.authorUid,
+      authorName: clampStr(params.authorName || 'موظف المصنع', 120),
+      employeeCode: clampStr(params.employeeCode, 48),
+      category: params.category,
+      subject: clampStr(params.subject, 160),
+      details: clampStr(params.details, 800),
+      status: 'open',
+      resolutionNote: '',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return complaintId;
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `factory_complaints/${complaintId}`,
+    );
+  }
+}
+
+export async function updateFactoryComplaintStatus(params: {
+  complaintId: string;
+  status: FactoryComplaint['status'];
+  resolutionNote: string;
+}): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'factory_complaints', params.complaintId), {
+      status: params.status,
+      resolutionNote: clampStr(params.resolutionNote, 500),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.UPDATE,
+      `factory_complaints/${params.complaintId}`,
+    );
+  }
+}
+
 export async function submitOnboardingApplication(
   data: Omit<
     OnboardingApplication,
@@ -607,14 +1156,18 @@ export async function decideOnboardingApplication(params: {
       }
     } else if (
       app.targetRole === 'merchant_owner' ||
-      app.targetRole === 'delivery_client'
+      app.targetRole === 'delivery_client' ||
+      app.targetRole === 'factory_manager' ||
+      app.targetRole === 'kitchen_manager' ||
+      app.targetRole === 'supplier'
     ) {
       createdTenantId = makeSafeId('ten');
       const entityType: EntityType =
         app.entityType === 'restaurant' ||
         app.entityType === 'store' ||
         app.entityType === 'central_kitchen' ||
-        app.entityType === 'company_factory'
+        app.entityType === 'company_factory' ||
+        app.entityType === 'supplier'
           ? app.entityType
           : 'delivery_client';
 
@@ -1016,10 +1569,6 @@ export async function saveSubscriptionPlan(
   }
 }
 
-// =========================================================================
-// BASIT ECOSYSTEM DOMAIN MUTATIONS (Ha-Be, VIP Orders, Benefits, Charity, Kaffarah, Logistics, Owner Vault)
-// =========================================================================
-
 export async function createVipDirectOrderWithPayment(params: {
   customerUid: string;
   customerName: string;
@@ -1056,6 +1605,7 @@ export async function createVipDirectOrderWithPayment(params: {
       totalEGP,
       paymentMethod: params.paymentMethod,
       notes: clampStr(params.notes, 600),
+      ...(params.tenantId ? { tenantId: clampStr(params.tenantId, 128) } : {}),
       status: 'pending_owner',
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -1318,6 +1868,7 @@ export async function updateKaffarahExecutionStatus(
 export async function createLogisticsInquiryRecord(params: {
   requesterUid: string;
   serviceKey: LogisticsServiceKey;
+  businessSector?: BusinessSectorKey;
   organizationName: string;
   contactName: string;
   phone: string;
@@ -1327,15 +1878,17 @@ export async function createLogisticsInquiryRecord(params: {
   notes: string;
 }): Promise<string> {
   const inquiryId = makeSafeId('inq');
+  const safePhone = clampStr(params.phone, 32);
   try {
     await setDoc(doc(db, 'logistics_service_inquiries', inquiryId), {
       inquiryId,
       requesterUid: params.requesterUid,
       serviceKey: params.serviceKey,
+      ...(params.businessSector ? { businessSector: params.businessSector } : {}),
       organizationName: clampStr(params.organizationName, 140),
       contactName: clampStr(params.contactName, 120),
-      phone: clampStr(params.phone, 32),
-      eventDate: clampStr(params.eventDate, 32),
+      phone: safePhone.length >= 6 ? safePhone : '+201000000000',
+      eventDate: clampStr(params.eventDate || new Date().toISOString().slice(0, 10), 32),
       guestCount: Math.max(1, Math.min(1000000, Math.round(params.guestCount))),
       city: clampStr(params.city, 80),
       notes: clampStr(params.notes, 600),
@@ -1379,16 +1932,24 @@ export async function updateLogisticsInquiryStatus(
   }
 }
 
+// =========================================================================
+// OWNER FINANCIAL MANAGEMENT (Protected strictly for platform_owner)
+// =========================================================================
 export async function recordOwnerFinancialEntry(params: {
   actorEmail: string;
   direction: OwnerFinancialEntry['direction'];
+  entryKind?: OwnerFinancialEntry['entryKind'];
+  sector?: BasitSectorKey;
   sourceOrBeneficiary: string;
   purpose: string;
   expenseCategory: OwnerFinancialEntry['expenseCategory'];
   channel: OwnerFinancialAccount['accountId'];
   grossEGP: number;
   commissionPct: number;
+  entryDate?: string;
   orderRef?: string;
+  voiceInputUsed?: boolean;
+  voiceTranscript?: string;
   currentAccountBalance: number;
   currentAccountLabel: string;
 }): Promise<string> {
@@ -1399,12 +1960,16 @@ export async function recordOwnerFinancialEntry(params: {
   const commissionEGP = Math.round((gross * pct) / 100);
   const netEGP = Math.max(0, gross - commissionEGP);
   const delta = params.direction === 'inflow' ? netEGP : -gross;
-  const entryDate = new Date().toISOString().slice(0, 10);
+  const entryDate = params.entryDate && params.entryDate.length >= 8
+    ? params.entryDate.slice(0, 32)
+    : new Date().toISOString().slice(0, 10);
 
   const batch = writeBatch(db);
   batch.set(doc(db, 'owner_financial_entries', entryId), {
     entryId,
     direction: params.direction,
+    entryKind: params.entryKind || (params.direction === 'inflow' ? 'revenue' : 'expense'),
+    sector: params.sector || 'general',
     sourceOrBeneficiary: clampStr(params.sourceOrBeneficiary, 160),
     purpose: clampStr(params.purpose, 280),
     expenseCategory: params.expenseCategory,
@@ -1415,6 +1980,9 @@ export async function recordOwnerFinancialEntry(params: {
     netEGP,
     entryDate,
     orderRef: clampStr(params.orderRef ?? '', 120),
+    confirmedByOwner: true,
+    voiceInputUsed: Boolean(params.voiceInputUsed),
+    voiceTranscript: clampStr(params.voiceTranscript ?? '', 900),
     createdByEmail: clampStr(params.actorEmail, 160),
     createdAt: serverTimestamp(),
   });
@@ -1431,10 +1999,12 @@ export async function recordOwnerFinancialEntry(params: {
     logId,
     actorEmail: clampStr(params.actorEmail, 160),
     actionAr: clampStr(
-      `${params.direction === 'inflow' ? 'إيداع' : 'مصروف'}: ${params.purpose}`,
+      `${params.voiceInputUsed ? '[مؤكد بعد الإملاء الصوتي] ' : ''}${
+        params.direction === 'inflow' ? 'إيراد / تحصيل' : 'مصروف / سداد'
+      }: ${params.purpose}`,
       240,
     ),
-    category: params.direction,
+    category: params.voiceInputUsed ? 'voice_confirmed' : params.direction,
     amountEGP: gross,
     details: clampStr(`${params.sourceOrBeneficiary} · صافي ${netEGP} ج.م`, 400),
     createdAt: serverTimestamp(),
@@ -1452,6 +2022,307 @@ export async function recordOwnerFinancialEntry(params: {
   }
 }
 
+export async function createOwnerInvoiceRecord(params: {
+  actorEmail: string;
+  sector: OwnerInvoice['sector'];
+  clientOrEntityName: string;
+  description: string;
+  amountEGP: number;
+  dueDate: string;
+  issueImmediately?: boolean;
+}): Promise<string> {
+  const invoiceId = makeSafeId('inv');
+  const logId = makeSafeId('flog');
+  const invoiceNumber = `INV-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`;
+  const amount = Math.max(1, Math.round(params.amountEGP));
+  const status: OwnerInvoice['status'] = params.issueImmediately
+    ? 'issued'
+    : 'draft_pending_review';
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'owner_invoices', invoiceId), {
+    invoiceId,
+    invoiceNumber,
+    sector: params.sector,
+    clientOrEntityName: clampStr(params.clientOrEntityName, 160),
+    description: clampStr(params.description, 300),
+    amountEGP: amount,
+    dueDate: clampStr(params.dueDate || new Date().toISOString().slice(0, 10), 32),
+    status,
+    confirmedByOwner: Boolean(params.issueImmediately),
+    createdByEmail: clampStr(params.actorEmail, 160),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  batch.set(doc(db, 'owner_financial_audit_logs', logId), {
+    logId,
+    actorEmail: clampStr(params.actorEmail, 160),
+    actionAr: clampStr(`فاتورة ${invoiceNumber} (${params.clientOrEntityName})`, 240),
+    category: 'invoice',
+    amountEGP: amount,
+    details: clampStr(`حالة: ${status} · القطاع: ${params.sector}`, 400),
+    createdAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+    return invoiceId;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `owner_invoices/${invoiceId}`);
+  }
+}
+
+export async function updateOwnerInvoiceStatus(params: {
+  invoice: OwnerInvoice;
+  nextStatus: OwnerInvoice['status'];
+  actorEmail: string;
+}): Promise<void> {
+  const logId = makeSafeId('flog');
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'owner_invoices', params.invoice.invoiceId), {
+    status: params.nextStatus,
+    confirmedByOwner: params.nextStatus !== 'draft_pending_review',
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(db, 'owner_financial_audit_logs', logId), {
+    logId,
+    actorEmail: clampStr(params.actorEmail, 160),
+    actionAr: clampStr(
+      `تحديث فاتورة ${params.invoice.invoiceNumber} إلى ${params.nextStatus}`,
+      240,
+    ),
+    category: 'invoice',
+    amountEGP: params.invoice.amountEGP,
+    details: clampStr(params.invoice.clientOrEntityName, 400),
+    createdAt: serverTimestamp(),
+  });
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.UPDATE,
+      `owner_invoices/${params.invoice.invoiceId}`,
+    );
+  }
+}
+
+export async function createOwnerReceivableRecord(params: {
+  actorEmail: string;
+  clientName: string;
+  purpose: string;
+  totalAmountEGP: number;
+  collectedAmountEGP?: number;
+  dueDate: string;
+}): Promise<string> {
+  const receivableId = makeSafeId('rcv');
+  const logId = makeSafeId('flog');
+  const total = Math.max(1, Math.round(params.totalAmountEGP));
+  const collected = Math.min(total, Math.max(0, Math.round(params.collectedAmountEGP ?? 0)));
+  const status: OwnerClientReceivable['status'] =
+    collected >= total ? 'collected' : collected > 0 ? 'partial' : 'open';
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'owner_client_receivables', receivableId), {
+    receivableId,
+    clientName: clampStr(params.clientName, 160),
+    purpose: clampStr(params.purpose, 240),
+    totalAmountEGP: total,
+    collectedAmountEGP: collected,
+    dueDate: clampStr(params.dueDate || new Date().toISOString().slice(0, 10), 32),
+    status,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(db, 'owner_financial_audit_logs', logId), {
+    logId,
+    actorEmail: clampStr(params.actorEmail, 160),
+    actionAr: clampStr(`قيد مستحق تحصيل: ${params.clientName}`, 240),
+    category: 'receivable',
+    amountEGP: total,
+    details: clampStr(params.purpose, 400),
+    createdAt: serverTimestamp(),
+  });
+  try {
+    await batch.commit();
+    return receivableId;
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `owner_client_receivables/${receivableId}`,
+    );
+  }
+}
+
+export async function collectOwnerReceivablePayment(params: {
+  receivable: OwnerClientReceivable;
+  addAmountEGP: number;
+  actorEmail: string;
+}): Promise<void> {
+  const nextCollected = Math.min(
+    params.receivable.totalAmountEGP,
+    params.receivable.collectedAmountEGP + Math.max(1, Math.round(params.addAmountEGP)),
+  );
+  const status: OwnerClientReceivable['status'] =
+    nextCollected >= params.receivable.totalAmountEGP ? 'collected' : 'partial';
+  const logId = makeSafeId('flog');
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'owner_client_receivables', params.receivable.receivableId), {
+    collectedAmountEGP: nextCollected,
+    status,
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(db, 'owner_financial_audit_logs', logId), {
+    logId,
+    actorEmail: clampStr(params.actorEmail, 160),
+    actionAr: clampStr(`تحصيل دفعة من: ${params.receivable.clientName}`, 240),
+    category: 'receivable',
+    amountEGP: Math.round(params.addAmountEGP),
+    details: clampStr(`إجمالي محصل ${nextCollected} / ${params.receivable.totalAmountEGP}`, 400),
+    createdAt: serverTimestamp(),
+  });
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.UPDATE,
+      `owner_client_receivables/${params.receivable.receivableId}`,
+    );
+  }
+}
+
+export async function createOwnerPayableRecord(params: {
+  actorEmail: string;
+  supplierName: string;
+  purpose: string;
+  totalAmountEGP: number;
+  paidAmountEGP?: number;
+  scheduledPaymentDate: string;
+}): Promise<string> {
+  const payableId = makeSafeId('payb');
+  const logId = makeSafeId('flog');
+  const total = Math.max(1, Math.round(params.totalAmountEGP));
+  const paid = Math.min(total, Math.max(0, Math.round(params.paidAmountEGP ?? 0)));
+  const status: OwnerSupplierPayable['status'] =
+    paid >= total ? 'paid' : paid > 0 ? 'partial' : 'scheduled';
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, 'owner_supplier_payables', payableId), {
+    payableId,
+    supplierName: clampStr(params.supplierName, 160),
+    purpose: clampStr(params.purpose, 240),
+    totalAmountEGP: total,
+    paidAmountEGP: paid,
+    scheduledPaymentDate: clampStr(
+      params.scheduledPaymentDate || new Date().toISOString().slice(0, 10),
+      32,
+    ),
+    status,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(db, 'owner_financial_audit_logs', logId), {
+    logId,
+    actorEmail: clampStr(params.actorEmail, 160),
+    actionAr: clampStr(`قيد التزام/دين مورد: ${params.supplierName}`, 240),
+    category: 'payable',
+    amountEGP: total,
+    details: clampStr(params.purpose, 400),
+    createdAt: serverTimestamp(),
+  });
+  try {
+    await batch.commit();
+    return payableId;
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `owner_supplier_payables/${payableId}`,
+    );
+  }
+}
+
+export async function payOwnerSupplierInstallment(params: {
+  payable: OwnerSupplierPayable;
+  addAmountEGP: number;
+  actorEmail: string;
+}): Promise<void> {
+  const nextPaid = Math.min(
+    params.payable.totalAmountEGP,
+    params.payable.paidAmountEGP + Math.max(1, Math.round(params.addAmountEGP)),
+  );
+  const status: OwnerSupplierPayable['status'] =
+    nextPaid >= params.payable.totalAmountEGP ? 'paid' : 'partial';
+  const logId = makeSafeId('flog');
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'owner_supplier_payables', params.payable.payableId), {
+    paidAmountEGP: nextPaid,
+    status,
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(db, 'owner_financial_audit_logs', logId), {
+    logId,
+    actorEmail: clampStr(params.actorEmail, 160),
+    actionAr: clampStr(`سداد دفعة لمورد: ${params.payable.supplierName}`, 240),
+    category: 'payable',
+    amountEGP: Math.round(params.addAmountEGP),
+    details: clampStr(`إجمالي مسدد ${nextPaid} / ${params.payable.totalAmountEGP}`, 400),
+    createdAt: serverTimestamp(),
+  });
+  try {
+    await batch.commit();
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.UPDATE,
+      `owner_supplier_payables/${params.payable.payableId}`,
+    );
+  }
+}
+
+export async function logOwnerFinancialAction(params: {
+  actorEmail: string;
+  actionAr: string;
+  category:
+    | 'inflow'
+    | 'outflow'
+    | 'balance'
+    | 'receivable'
+    | 'payable'
+    | 'invoice'
+    | 'voice_confirmed'
+    | 'security_2fa'
+    | 'ai_investor'
+    | 'pdf_export';
+  amountEGP: number;
+  details: string;
+}): Promise<void> {
+  const logId = makeSafeId('flog');
+  try {
+    await setDoc(doc(db, 'owner_financial_audit_logs', logId), {
+      logId,
+      actorEmail: clampStr(params.actorEmail, 160),
+      actionAr: clampStr(params.actionAr, 240),
+      category: params.category,
+      amountEGP: Math.max(0, Math.round(params.amountEGP)),
+      details: clampStr(params.details, 400),
+      createdAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(
+      error,
+      OperationType.CREATE,
+      `owner_financial_audit_logs/${logId}`,
+    );
+  }
+}
+
+// =========================================================================
+// LIVE SECURITY RED-TEAM PROBES
+// =========================================================================
 export interface RedTeamProbeResult {
   id: number;
   titleAr: string;
@@ -1479,18 +2350,17 @@ export async function runLiveRedTeamProbes(
 ): Promise<RedTeamProbeResult[]> {
   const results: RedTeamProbeResult[] = [];
 
-  // 1. Self-Privilege Escalation (users/{uid})
   const p1 = isAdminUser
     ? {
         denied: true,
         codeOrMsg:
-          'Rule enforced: non-admin users/{uid} restricts create role to [visitor, customer] and locks role on update.',
+          'Rule enforced: non-admin users/{uid} restricts create role to [visitor, customer, client, employee] and locks role on update.',
       }
     : await expectDenied(() =>
         setDoc(doc(db, 'users', makeSafeId('red1')), {
           uid,
           displayName: 'Attacker',
-          role: 'central_super_admin',
+          role: 'platform_owner',
           status: 'active',
           countryCode: 'EG',
           createdAt: serverTimestamp(),
@@ -1505,7 +2375,6 @@ export async function runLiveRedTeamProbes(
     detail: p1.denied ? 'PERMISSION_DENIED (محظور)' : p1.codeOrMsg,
   });
 
-  // 2. Ghost Field Shadow Write (onboarding_applications)
   const p2 = await expectDenied(() =>
     setDoc(doc(db, 'onboarding_applications', makeSafeId('red2')), {
       appId: 'red2',
@@ -1533,7 +2402,6 @@ export async function runLiveRedTeamProbes(
     detail: p2.denied ? 'PERMISSION_DENIED (hasOnly رفض الحقل الشبح)' : p2.codeOrMsg,
   });
 
-  // 3. Cross-Tenant Catalog Poisoning
   const p3 = isAdminUser
     ? {
         denied: true,
@@ -1562,7 +2430,6 @@ export async function runLiveRedTeamProbes(
     detail: p3.denied ? 'PERMISSION_DENIED (عزل المستأجر مفعل)' : p3.codeOrMsg,
   });
 
-  // 4. Unverified Email Admin Claim
   results.push({
     id: 4,
     titleAr: 'بريد إلكتروني مزيف وغير موثق (email_verified: false)',
@@ -1572,7 +2439,6 @@ export async function runLiveRedTeamProbes(
       'محظور في firestore.rules عبر request.auth.token.email_verified == true',
   });
 
-  // 5. Cross-Tenant Order Scraping
   const p5 = isAdminUser
     ? {
         denied: true,
@@ -1587,7 +2453,6 @@ export async function runLiveRedTeamProbes(
     detail: p5.denied ? 'PERMISSION_DENIED (Query Enforcer مفعل)' : p5.codeOrMsg,
   });
 
-  // 6. PII Leak Attempt
   const p6 = isAdminUser
     ? {
         denied: true,
@@ -1604,7 +2469,6 @@ export async function runLiveRedTeamProbes(
     detail: p6.denied ? 'PERMISSION_DENIED (فصل PII مفعل)' : p6.codeOrMsg,
   });
 
-  // 7. Courier Wallet Tampering
   const p7 = isAdminUser
     ? {
         denied: true,
@@ -1626,7 +2490,6 @@ export async function runLiveRedTeamProbes(
     detail: p7.denied ? 'PERMISSION_DENIED (حقول المحفظة محمية)' : p7.codeOrMsg,
   });
 
-  // 8. State Shortcutting on Delivery
   const p8 = isAdminUser
     ? {
         denied: true,
@@ -1648,7 +2511,6 @@ export async function runLiveRedTeamProbes(
     detail: p8.denied ? 'PERMISSION_DENIED (تسلسل الحالة إجباري)' : p8.codeOrMsg,
   });
 
-  // 9. Free Location / Zero-Cost Opportunity
   const p9 = await expectDenied(() =>
     setDoc(doc(db, 'opportunities', makeSafeId('red9')), {
       oppId: 'red9',
@@ -1675,7 +2537,6 @@ export async function runLiveRedTeamProbes(
     detail: p9.denied ? 'PERMISSION_DENIED (حظر الموارد المجانية مفعل)' : p9.codeOrMsg,
   });
 
-  // 10. Unauthorized Usufruct Contract Issuance
   const p10 = await expectDenied(() =>
     setDoc(doc(db, 'usufruct_contracts', makeSafeId('red10')), {
       contractId: 'red10',
@@ -1701,7 +2562,6 @@ export async function runLiveRedTeamProbes(
     detail: p10.denied ? 'PERMISSION_DENIED (يتطلب مقترح متفق عليه وإدارة)' : p10.codeOrMsg,
   });
 
-  // 11. Profit Split Overflow (70 + 40 + 10 = 120 != 100)
   const p11 = await expectDenied(() =>
     setDoc(doc(db, 'usufruct_proposals', makeSafeId('red11')), {
       proposalId: 'red11',
@@ -1729,7 +2589,6 @@ export async function runLiveRedTeamProbes(
     detail: p11.denied ? 'PERMISSION_DENIED (مجموع النسب != 100)' : p11.codeOrMsg,
   });
 
-  // 12. Audit Log Tampering (update / delete)
   const p12a = await expectDenied(() =>
     updateDoc(doc(db, 'audit_logs', 'log_immutable_probe'), {
       actionEn: 'tampered',

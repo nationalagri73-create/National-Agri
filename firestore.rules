@@ -20,7 +20,10 @@ service cloud.firestore {
     }
 
     function isSignedIn() {
-      return request.auth != null && request.auth.token.email_verified == true;
+      return request.auth != null && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.phone_number != null
+      );
     }
 
     function isValidId(id) {
@@ -46,11 +49,21 @@ service cloud.firestore {
       );
     }
 
+    function isPlatformOwner() {
+      return isBootstrappedAdmin() || (
+        isSignedIn() &&
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.adminLevel == 'platform_owner' &&
+        (!('active' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data) ||
+          get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true)
+      );
+    }
+
     function isAdmin() {
       return isBootstrappedAdmin() || (
         isSignedIn() &&
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.adminLevel == 'central_super_admin' &&
+        get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.adminLevel in ['platform_owner', 'system_admin', 'central_super_admin'] &&
         (!('active' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data) ||
           get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true)
       );
@@ -65,29 +78,39 @@ service cloud.firestore {
     }
 
     function isTenantOwnerOrMember(tenantId) {
-      return isSignedIn() && (
+      return isSignedIn() && exists(/databases/$(database)/documents/tenants/$(tenantId)) && (
         get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid ||
         exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid))
       );
     }
 
+    function isAssignedTenantRole(tenantId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active'
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == tenantId
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['factory_manager', 'kitchen_manager', 'supplier'];
+    }
+
     function isActiveTenantMember(tenantId) {
-      return isSignedIn() && (
-        get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid || (
-          exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid)) &&
-          get(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid)).data.active == true
+      return isAssignedTenantRole(tenantId) || (
+        isSignedIn() && exists(/databases/$(database)/documents/tenants/$(tenantId)) && (
+          get(/databases/$(database)/documents/tenants/$(tenantId)).data.ownerUid == request.auth.uid || (
+            exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid)).data.active == true
+          )
         )
       );
     }
 
     // =========================================================================
-    // ENTITY VALIDATION BLUEPRINTS (Anti-Update-Gap — No resource/diff inside)
+    // ENTITY VALIDATION BLUEPRINTS
     // =========================================================================
     function isValidAdminRecord(data) {
       return data.keys().hasAll(['uid', 'adminLevel', 'label', 'grantedBy', 'createdAt'])
         && data.keys().hasOnly(['uid', 'adminLevel', 'label', 'grantedBy', 'active', 'createdAt'])
         && isValidId(data.uid)
-        && data.adminLevel in ['central_super_admin', 'finance_admin']
+        && data.adminLevel in ['platform_owner', 'system_admin', 'central_super_admin', 'finance_admin']
         && isValidString(data.label, 2, 100)
         && isValidId(data.grantedBy)
         && (!('active' in data) || data.active is bool)
@@ -99,7 +122,12 @@ service cloud.firestore {
         && data.keys().hasOnly(['uid', 'displayName', 'role', 'tenantId', 'status', 'countryCode', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
         && isValidString(data.displayName, 2, 120)
-        && data.role in ['visitor', 'customer', 'employee', 'entity_admin', 'merchant_owner', 'merchant_staff', 'kitchen_partner', 'entertainment_partner', 'delivery_client', 'courier', 'opportunity_partner', 'finance_admin', 'central_admin', 'central_super_admin']
+        && data.role in [
+          'platform_owner', 'system_admin', 'factory_manager', 'kitchen_manager', 'supplier', 'employee', 'client',
+          'visitor', 'customer', 'entity_admin', 'merchant_owner', 'merchant_staff',
+          'kitchen_partner', 'entertainment_partner', 'delivery_client', 'courier',
+          'opportunity_partner', 'finance_admin', 'central_admin', 'central_super_admin'
+        ]
         && (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128))
         && data.status in ['active', 'pending', 'suspended']
         && isValidCountry(data.countryCode)
@@ -123,8 +151,8 @@ service cloud.firestore {
         && data.keys().hasOnly(['appId', 'applicantUid', 'targetRole', 'entityType', 'businessName', 'contactName', 'phone', 'countryCode', 'city', 'commercialRegRef', 'selectedPlanId', 'notes', 'status', 'adminComment', 'reviewedByUid', 'createdTenantId', 'createdAt', 'updatedAt'])
         && isValidId(data.appId)
         && isValidId(data.applicantUid)
-        && data.targetRole in ['merchant_owner', 'delivery_client', 'courier', 'opportunity_partner']
-        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'courier_individual', 'project_owner', 'site_owner']
+        && data.targetRole in ['merchant_owner', 'delivery_client', 'courier', 'opportunity_partner', 'factory_manager', 'kitchen_manager', 'supplier']
+        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'supplier', 'courier_individual', 'project_owner', 'site_owner']
         && isValidString(data.businessName, 2, 140)
         && isValidString(data.contactName, 2, 120)
         && isValidString(data.phone, 6, 32)
@@ -143,11 +171,20 @@ service cloud.firestore {
 
     function isValidTenantWorkspace(data) {
       return data.keys().hasAll(['tenantId', 'ownerUid', 'name', 'entityType', 'countryCode', 'city', 'commercialRegRef', 'planId', 'customCommissionPct', 'deliveryEnabled', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['tenantId', 'ownerUid', 'name', 'entityType', 'countryCode', 'city', 'commercialRegRef', 'planId', 'customCommissionPct', 'deliveryEnabled', 'status', 'contractStatus', 'contractedKitchenIdsCsv', 'logoUrl', 'cateringScheduleText', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'tenantId', 'ownerUid', 'name', 'nameEn', 'entityType', 'tenantKind',
+          'countryCode', 'city', 'commercialRegRef', 'planId', 'customCommissionPct',
+          'deliveryEnabled', 'status', 'contractStatus', 'contractedKitchenIdsCsv',
+          'logoUrl', 'primaryColor', 'accentColor', 'specialtiesAr', 'specialtiesEn',
+          'capacityMealsPerDay', 'serviceAreasCsv', 'averageRating', 'ratingCount',
+          'cateringScheduleText', 'createdAt', 'updatedAt'
+        ])
         && isValidId(data.tenantId)
         && isValidId(data.ownerUid)
         && isValidString(data.name, 2, 140)
-        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'delivery_client']
+        && (!('nameEn' in data) || isValidString(data.nameEn, 0, 140))
+        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'delivery_client', 'supplier']
+        && (!('tenantKind' in data) || data.tenantKind in ['factory', 'central_kitchen', 'supplier', 'company', 'restaurant', 'store', 'delivery_client'])
         && isValidCountry(data.countryCode)
         && isValidString(data.city, 2, 80)
         && isValidString(data.commercialRegRef, 2, 80)
@@ -158,6 +195,14 @@ service cloud.firestore {
         && (!('contractStatus' in data) || data.contractStatus in ['contracted', 'in_contracting', 'prospective', 'unlaunched_sector'])
         && (!('contractedKitchenIdsCsv' in data) || isValidString(data.contractedKitchenIdsCsv, 0, 1000))
         && (!('logoUrl' in data) || isValidString(data.logoUrl, 0, 500))
+        && (!('primaryColor' in data) || isValidString(data.primaryColor, 0, 24))
+        && (!('accentColor' in data) || isValidString(data.accentColor, 0, 24))
+        && (!('specialtiesAr' in data) || isValidString(data.specialtiesAr, 0, 300))
+        && (!('specialtiesEn' in data) || isValidString(data.specialtiesEn, 0, 300))
+        && (!('capacityMealsPerDay' in data) || (data.capacityMealsPerDay is number && data.capacityMealsPerDay >= 0 && data.capacityMealsPerDay <= 1000000))
+        && (!('serviceAreasCsv' in data) || isValidString(data.serviceAreasCsv, 0, 300))
+        && (!('averageRating' in data) || (data.averageRating is number && data.averageRating >= 0 && data.averageRating <= 5))
+        && (!('ratingCount' in data) || (data.ratingCount is number && data.ratingCount >= 0 && data.ratingCount <= 1000000))
         && (!('cateringScheduleText' in data) || isValidString(data.cateringScheduleText, 0, 500))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -182,12 +227,28 @@ service cloud.firestore {
 
     function isValidPublicStorefront(data) {
       return data.keys().hasAll(['tenantId', 'name', 'entityType', 'countryCode', 'city', 'isActive', 'updatedAt'])
-        && data.keys().hasOnly(['tenantId', 'name', 'entityType', 'countryCode', 'city', 'isActive', 'updatedAt'])
+        && data.keys().hasOnly([
+          'tenantId', 'name', 'nameEn', 'entityType', 'tenantKind',
+          'countryCode', 'city', 'primaryColor', 'accentColor', 'logoUrl',
+          'specialtiesAr', 'specialtiesEn', 'capacityMealsPerDay',
+          'serviceAreasCsv', 'averageRating', 'ratingCount', 'isActive', 'updatedAt'
+        ])
         && isValidId(data.tenantId)
         && isValidString(data.name, 2, 140)
-        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'delivery_client']
+        && (!('nameEn' in data) || isValidString(data.nameEn, 0, 140))
+        && data.entityType in ['restaurant', 'store', 'central_kitchen', 'company_factory', 'delivery_client', 'supplier']
+        && (!('tenantKind' in data) || data.tenantKind in ['factory', 'central_kitchen', 'supplier', 'company', 'restaurant', 'store', 'delivery_client'])
         && isValidCountry(data.countryCode)
         && isValidString(data.city, 2, 80)
+        && (!('primaryColor' in data) || isValidString(data.primaryColor, 0, 24))
+        && (!('accentColor' in data) || isValidString(data.accentColor, 0, 24))
+        && (!('logoUrl' in data) || isValidString(data.logoUrl, 0, 500))
+        && (!('specialtiesAr' in data) || isValidString(data.specialtiesAr, 0, 300))
+        && (!('specialtiesEn' in data) || isValidString(data.specialtiesEn, 0, 300))
+        && (!('capacityMealsPerDay' in data) || (data.capacityMealsPerDay is number && data.capacityMealsPerDay >= 0 && data.capacityMealsPerDay <= 1000000))
+        && (!('serviceAreasCsv' in data) || isValidString(data.serviceAreasCsv, 0, 300))
+        && (!('averageRating' in data) || (data.averageRating is number && data.averageRating >= 0 && data.averageRating <= 5))
+        && (!('ratingCount' in data) || (data.ratingCount is number && data.ratingCount >= 0 && data.ratingCount <= 1000000))
         && data.isActive is bool
         && data.updatedAt is timestamp;
     }
@@ -224,6 +285,146 @@ service cloud.firestore {
         && data.needsDelivery is bool
         && isValidString(data.dropoffAddress, 3, 240)
         && data.status in ['pending_merchant', 'accepted_preparing', 'ready_for_pickup', 'in_delivery', 'completed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMarketplaceRfq(data) {
+      return data.keys().hasAll(['rfqId', 'requesterUid', 'requesterOrgName', 'phone', 'targetTenantId', 'targetMerchantOwnerUid', 'targetName', 'dailyQty', 'frequency', 'city', 'details', 'quotedPriceEGP', 'merchantNote', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['rfqId', 'requesterUid', 'requesterOrgName', 'phone', 'targetTenantId', 'targetMerchantOwnerUid', 'targetName', 'dailyQty', 'frequency', 'city', 'details', 'quotedPriceEGP', 'merchantNote', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.rfqId)
+        && isValidId(data.requesterUid)
+        && isValidString(data.requesterOrgName, 2, 140)
+        && isValidString(data.phone, 6, 32)
+        && isValidId(data.targetTenantId)
+        && isValidString(data.targetMerchantOwnerUid, 1, 128)
+        && isValidString(data.targetName, 2, 140)
+        && data.dailyQty is number && data.dailyQty >= 1 && data.dailyQty <= 1000000
+        && data.frequency in ['daily', 'weekly', 'monthly', 'one_time']
+        && isValidString(data.city, 2, 80)
+        && isValidString(data.details, 2, 600)
+        && data.quotedPriceEGP is number && data.quotedPriceEGP >= 0 && data.quotedPriceEGP <= 100000000
+        && isValidString(data.merchantNote, 0, 400)
+        && data.status in ['open', 'quoted', 'accepted', 'declined']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMarketplaceReview(data) {
+      return data.keys().hasAll(['reviewId', 'tenantId', 'authorUid', 'authorName', 'rating', 'comment', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['reviewId', 'tenantId', 'authorUid', 'authorName', 'rating', 'comment', 'createdAt', 'updatedAt'])
+        && isValidId(data.reviewId)
+        && isValidId(data.tenantId)
+        && isValidId(data.authorUid)
+        && isValidString(data.authorName, 2, 120)
+        && data.rating is number && data.rating >= 1 && data.rating <= 5
+        && isValidString(data.comment, 2, 500)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBasitCard(data) {
+      return data.keys().hasAll(['cardId', 'ownerUid', 'holderName', 'employeeCode', 'tenantId', 'factoryName', 'cardNumberMasked', 'monthlyQuotaEGP', 'usedAmountEGP', 'validFrom', 'validTo', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['cardId', 'ownerUid', 'holderName', 'employeeCode', 'tenantId', 'factoryName', 'cardNumberMasked', 'monthlyQuotaEGP', 'usedAmountEGP', 'validFrom', 'validTo', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.cardId)
+        && isValidId(data.ownerUid)
+        && isValidString(data.holderName, 2, 120)
+        && isValidString(data.employeeCode, 2, 48)
+        && isValidId(data.tenantId)
+        && isValidString(data.factoryName, 2, 140)
+        && isValidString(data.cardNumberMasked, 4, 32)
+        && data.monthlyQuotaEGP is number && data.monthlyQuotaEGP >= 0 && data.monthlyQuotaEGP <= 100000
+        && data.usedAmountEGP is number && data.usedAmountEGP >= 0 && data.usedAmountEGP <= data.monthlyQuotaEGP
+        && isValidString(data.validFrom, 8, 32)
+        && isValidString(data.validTo, 8, 32)
+        && data.status in ['active', 'frozen', 'expired']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBasitCardRedemption(data) {
+      return data.keys().hasAll(['redemptionId', 'cardId', 'ownerUid', 'tenantId', 'vendorName', 'offerTitle', 'amountEGP', 'discountSavedEGP', 'createdAt'])
+        && data.keys().hasOnly(['redemptionId', 'cardId', 'ownerUid', 'tenantId', 'vendorName', 'offerTitle', 'amountEGP', 'discountSavedEGP', 'createdAt'])
+        && isValidId(data.redemptionId)
+        && isValidId(data.cardId)
+        && isValidId(data.ownerUid)
+        && isValidId(data.tenantId)
+        && isValidString(data.vendorName, 2, 140)
+        && isValidString(data.offerTitle, 2, 160)
+        && data.amountEGP is number && data.amountEGP > 0 && data.amountEGP <= 100000
+        && data.discountSavedEGP is number && data.discountSavedEGP >= 0 && data.discountSavedEGP <= 100000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidHealthyPlan(data) {
+      return data.keys().hasAll(['planId', 'targetSegment', 'titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'caloriesPerDay', 'proteinGrams', 'carbsGrams', 'fatsGrams', 'mealsPerDay', 'durationDays', 'priceEGP', 'isActive', 'updatedAt'])
+        && data.keys().hasOnly(['planId', 'targetSegment', 'titleAr', 'titleEn', 'descriptionAr', 'descriptionEn', 'caloriesPerDay', 'proteinGrams', 'carbsGrams', 'fatsGrams', 'mealsPerDay', 'durationDays', 'priceEGP', 'isActive', 'updatedAt'])
+        && isValidId(data.planId)
+        && data.targetSegment in ['individual', 'gym', 'sports_center']
+        && isValidString(data.titleAr, 2, 140)
+        && isValidString(data.titleEn, 2, 140)
+        && isValidString(data.descriptionAr, 2, 400)
+        && isValidString(data.descriptionEn, 2, 400)
+        && data.caloriesPerDay is number && data.caloriesPerDay >= 500 && data.caloriesPerDay <= 8000
+        && data.proteinGrams is number && data.proteinGrams >= 10 && data.proteinGrams <= 500
+        && data.carbsGrams is number && data.carbsGrams >= 0 && data.carbsGrams <= 1000
+        && data.fatsGrams is number && data.fatsGrams >= 0 && data.fatsGrams <= 500
+        && data.mealsPerDay is number && data.mealsPerDay >= 1 && data.mealsPerDay <= 10
+        && data.durationDays is number && data.durationDays >= 1 && data.durationDays <= 365
+        && data.priceEGP is number && data.priceEGP >= 50 && data.priceEGP <= 10000000
+        && data.isActive is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHealthySubscription(data) {
+      return data.keys().hasAll(['subId', 'subscriberUid', 'subscriberName', 'phone', 'planId', 'planTitle', 'targetSegment', 'orgOrGymName', 'startDate', 'deliveryAddress', 'totalPriceEGP', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['subId', 'subscriberUid', 'subscriberName', 'phone', 'planId', 'planTitle', 'targetSegment', 'orgOrGymName', 'startDate', 'deliveryAddress', 'totalPriceEGP', 'status', 'createdAt', 'updatedAt'])
+        && isValidId(data.subId)
+        && isValidId(data.subscriberUid)
+        && isValidString(data.subscriberName, 2, 120)
+        && isValidString(data.phone, 6, 32)
+        && isValidId(data.planId)
+        && isValidString(data.planTitle, 2, 160)
+        && data.targetSegment in ['individual', 'gym', 'sports_center']
+        && isValidString(data.orgOrGymName, 0, 140)
+        && isValidString(data.startDate, 8, 32)
+        && isValidString(data.deliveryAddress, 3, 240)
+        && data.totalPriceEGP is number && data.totalPriceEGP >= 50 && data.totalPriceEGP <= 10000000
+        && data.status in ['active', 'paused', 'completed']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFactoryEmployee(data) {
+      return data.keys().hasAll(['empId', 'tenantId', 'employeeCode', 'nameAr', 'nameEn', 'departmentAr', 'jobTitle', 'shift', 'monthlyCardLimitEGP', 'isActive', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['empId', 'tenantId', 'employeeCode', 'nameAr', 'nameEn', 'departmentAr', 'jobTitle', 'shift', 'monthlyCardLimitEGP', 'isActive', 'createdAt', 'updatedAt'])
+        && isValidId(data.empId)
+        && isValidId(data.tenantId)
+        && isValidString(data.employeeCode, 2, 48)
+        && isValidString(data.nameAr, 2, 120)
+        && isValidString(data.nameEn, 2, 120)
+        && isValidString(data.departmentAr, 2, 100)
+        && isValidString(data.jobTitle, 2, 100)
+        && isValidString(data.shift, 2, 64)
+        && data.monthlyCardLimitEGP is number && data.monthlyCardLimitEGP >= 0 && data.monthlyCardLimitEGP <= 100000
+        && data.isActive is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFactoryComplaint(data) {
+      return data.keys().hasAll(['complaintId', 'tenantId', 'authorUid', 'authorName', 'employeeCode', 'category', 'subject', 'details', 'status', 'resolutionNote', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['complaintId', 'tenantId', 'authorUid', 'authorName', 'employeeCode', 'category', 'subject', 'details', 'status', 'resolutionNote', 'createdAt', 'updatedAt'])
+        && isValidId(data.complaintId)
+        && isValidId(data.tenantId)
+        && isValidId(data.authorUid)
+        && isValidString(data.authorName, 2, 120)
+        && isValidString(data.employeeCode, 0, 48)
+        && data.category in ['meal_quality', 'delivery_delay', 'card_voucher', 'kitchen_hygiene', 'other']
+        && isValidString(data.subject, 2, 160)
+        && isValidString(data.details, 4, 800)
+        && data.status in ['open', 'in_progress', 'resolved']
+        && isValidString(data.resolutionNote, 0, 500)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -383,9 +584,14 @@ service cloud.firestore {
         && data.keys().hasOnly(['notifId', 'recipientUid', 'recipientRole', 'tenantId', 'category', 'titleAr', 'titleEn', 'bodyAr', 'bodyEn', 'targetSection', 'status', 'createdAt', 'updatedAt'])
         && isValidId(data.notifId)
         && isValidId(data.recipientUid)
-        && data.recipientRole in ['visitor', 'customer', 'employee', 'entity_admin', 'merchant_owner', 'merchant_staff', 'kitchen_partner', 'entertainment_partner', 'delivery_client', 'courier', 'opportunity_partner', 'finance_admin', 'central_admin', 'central_super_admin']
+        && data.recipientRole in [
+          'platform_owner', 'system_admin', 'factory_manager', 'kitchen_manager', 'supplier', 'employee', 'client',
+          'visitor', 'customer', 'entity_admin', 'merchant_owner', 'merchant_staff',
+          'kitchen_partner', 'entertainment_partner', 'delivery_client', 'courier',
+          'opportunity_partner', 'finance_admin', 'central_admin', 'central_super_admin'
+        ]
         && (!('tenantId' in data) || isValidString(data.tenantId, 0, 128))
-        && data.category in ['onboarding', 'order', 'payment', 'delivery', 'offer', 'system']
+        && data.category in ['onboarding', 'order', 'payment', 'delivery', 'offer', 'complaint', 'system']
         && isValidString(data.titleAr, 2, 140)
         && isValidString(data.titleEn, 2, 140)
         && isValidString(data.bodyAr, 2, 400)
@@ -456,24 +662,13 @@ service cloud.firestore {
     function isValidPlatformSettings(data) {
       return data.keys().hasAll(['settingId', 'autoActivateCustomers', 'requireAdminApprovalForPartners', 'defaultLanguage', 'defaultCountryCode', 'enabledCountriesCsv', 'updatedByUid', 'updatedAt'])
         && data.keys().hasOnly([
-          'settingId',
-          'autoActivateCustomers',
-          'requireAdminApprovalForPartners',
-          'defaultLanguage',
-          'defaultCountryCode',
-          'enabledCountriesCsv',
-          'cmsPrimaryPurple',
-          'cmsAccentYellow',
-          'cmsHeroBadgeAr',
-          'cmsHeroTitleAr',
-          'cmsHeroSubtitleAr',
-          'cmsMenuOverridesJson',
-          'cmsIconOverridesJson',
-          'designatedBasitAdminEmailsCsv',
-          'designatedHabeApproverEmailsCsv',
-          'rolePermissionsMatrixJson',
-          'updatedByUid',
-          'updatedAt'
+          'settingId', 'autoActivateCustomers', 'requireAdminApprovalForPartners',
+          'defaultLanguage', 'defaultCountryCode', 'enabledCountriesCsv',
+          'cmsPrimaryPurple', 'cmsAccentYellow', 'cmsHeroBadgeAr',
+          'cmsHeroTitleAr', 'cmsHeroSubtitleAr', 'cmsMenuOverridesJson',
+          'cmsIconOverridesJson', 'designatedBasitAdminEmailsCsv',
+          'designatedHabeApproverEmailsCsv', 'rolePermissionsMatrixJson',
+          'updatedByUid', 'updatedAt'
         ])
         && data.settingId == 'global'
         && data.autoActivateCustomers is bool
@@ -540,12 +735,12 @@ service cloud.firestore {
 
     function isValidVipDirectOrder(data) {
       return data.keys().hasAll(['orderId', 'customerUid', 'customerName', 'phone', 'sourceChannel', 'itemsSummary', 'items', 'totalEGP', 'paymentMethod', 'notes', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['orderId', 'customerUid', 'customerName', 'phone', 'sourceChannel', 'itemsSummary', 'items', 'totalEGP', 'paymentMethod', 'notes', 'status', 'ownerReply', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['orderId', 'customerUid', 'customerName', 'phone', 'sourceChannel', 'itemsSummary', 'items', 'totalEGP', 'paymentMethod', 'notes', 'status', 'ownerReply', 'tenantId', 'createdAt', 'updatedAt'])
         && isValidId(data.orderId)
         && isValidId(data.customerUid)
         && isValidString(data.customerName, 2, 120)
         && isValidString(data.phone, 6, 32)
-        && data.sourceChannel in ['camel_liver_vip', 'cart_direct', 'al_ain_offer']
+        && data.sourceChannel in ['camel_liver_vip', 'cart_direct', 'al_ain_offer', 'factory_portal']
         && isValidString(data.itemsSummary, 2, 1000)
         && data.items is list && data.items.size() >= 1 && data.items.size() <= 50 && data.items[0] is map
         && data.totalEGP is number && data.totalEGP >= 1 && data.totalEGP <= 10000000
@@ -553,6 +748,7 @@ service cloud.firestore {
         && isValidString(data.notes, 0, 600)
         && data.status in ['pending_owner', 'approved', 'preparing', 'completed', 'rejected']
         && (!('ownerReply' in data) || isValidString(data.ownerReply, 0, 400))
+        && (!('tenantId' in data) || isValidString(data.tenantId, 0, 128))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -628,10 +824,11 @@ service cloud.firestore {
 
     function isValidLogisticsServiceInquiry(data) {
       return data.keys().hasAll(['inquiryId', 'requesterUid', 'serviceKey', 'organizationName', 'contactName', 'phone', 'eventDate', 'guestCount', 'city', 'notes', 'status', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['inquiryId', 'requesterUid', 'serviceKey', 'organizationName', 'contactName', 'phone', 'eventDate', 'guestCount', 'city', 'notes', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['inquiryId', 'requesterUid', 'serviceKey', 'businessSector', 'organizationName', 'contactName', 'phone', 'eventDate', 'guestCount', 'city', 'notes', 'status', 'createdAt', 'updatedAt'])
         && isValidId(data.inquiryId)
         && isValidId(data.requesterUid)
         && data.serviceKey in ['weddings_occasions', 'conferences_events', 'open_buffets', 'hospitality', 'central_kitchens_setup', 'institutional_events_catering', 'supply_distribution_logistics']
+        && (!('businessSector' in data) || data.businessSector in ['factories', 'companies', 'hospitals', 'schools', 'clubs', 'parties', 'conferences'])
         && isValidString(data.organizationName, 2, 140)
         && isValidString(data.contactName, 2, 120)
         && isValidString(data.phone, 6, 32)
@@ -671,9 +868,16 @@ service cloud.firestore {
 
     function isValidOwnerFinancialEntry(data) {
       return data.keys().hasAll(['entryId', 'direction', 'sourceOrBeneficiary', 'purpose', 'expenseCategory', 'channel', 'grossEGP', 'commissionPct', 'commissionEGP', 'netEGP', 'entryDate', 'orderRef', 'createdByEmail', 'createdAt'])
-        && data.keys().hasOnly(['entryId', 'direction', 'sourceOrBeneficiary', 'purpose', 'expenseCategory', 'channel', 'grossEGP', 'commissionPct', 'commissionEGP', 'netEGP', 'entryDate', 'orderRef', 'createdByEmail', 'createdAt'])
+        && data.keys().hasOnly([
+          'entryId', 'direction', 'entryKind', 'sector', 'sourceOrBeneficiary', 'purpose',
+          'expenseCategory', 'channel', 'grossEGP', 'commissionPct', 'commissionEGP',
+          'netEGP', 'entryDate', 'orderRef', 'confirmedByOwner', 'voiceInputUsed',
+          'voiceTranscript', 'createdByEmail', 'createdAt'
+        ])
         && isValidId(data.entryId)
         && data.direction in ['inflow', 'outflow']
+        && (!('entryKind' in data) || data.entryKind in ['revenue', 'expense', 'receivable', 'payable', 'debt'])
+        && (!('sector' in data) || data.sector in ['marketplace', 'business', 'card', 'healthy', 'factory', 'logistics', 'general'])
         && isValidString(data.sourceOrBeneficiary, 2, 160)
         && isValidString(data.purpose, 2, 280)
         && data.expenseCategory in ['none', 'salaries', 'raw_materials', 'marketing', 'commissions', 'logistics', 'other']
@@ -684,8 +888,28 @@ service cloud.firestore {
         && data.netEGP is number && data.netEGP >= 0 && data.netEGP <= 1000000000
         && isValidString(data.entryDate, 8, 32)
         && isValidString(data.orderRef, 0, 120)
+        && (!('confirmedByOwner' in data) || data.confirmedByOwner == true)
+        && (!('voiceInputUsed' in data) || data.voiceInputUsed is bool)
+        && (!('voiceTranscript' in data) || isValidString(data.voiceTranscript, 0, 1000))
         && isValidString(data.createdByEmail, 5, 160)
         && data.createdAt is timestamp;
+    }
+
+    function isValidOwnerInvoice(data) {
+      return data.keys().hasAll(['invoiceId', 'invoiceNumber', 'sector', 'clientOrEntityName', 'description', 'amountEGP', 'dueDate', 'status', 'createdByEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['invoiceId', 'invoiceNumber', 'sector', 'clientOrEntityName', 'description', 'amountEGP', 'dueDate', 'status', 'confirmedByOwner', 'createdByEmail', 'createdAt', 'updatedAt'])
+        && isValidId(data.invoiceId)
+        && isValidString(data.invoiceNumber, 2, 64)
+        && data.sector in ['marketplace', 'business', 'card', 'healthy', 'factory', 'logistics']
+        && isValidString(data.clientOrEntityName, 2, 160)
+        && isValidString(data.description, 2, 300)
+        && data.amountEGP is number && data.amountEGP > 0 && data.amountEGP <= 1000000000
+        && isValidString(data.dueDate, 8, 32)
+        && data.status in ['draft_pending_review', 'issued', 'paid', 'overdue']
+        && (!('confirmedByOwner' in data) || data.confirmedByOwner is bool)
+        && isValidString(data.createdByEmail, 5, 160)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
     }
 
     function isValidOwnerClientReceivable(data) {
@@ -722,14 +946,14 @@ service cloud.firestore {
         && isValidId(data.logId)
         && isValidString(data.actorEmail, 5, 160)
         && isValidString(data.actionAr, 2, 240)
-        && data.category in ['inflow', 'outflow', 'balance', 'receivable', 'payable', 'security_2fa', 'ai_investor', 'pdf_export']
+        && data.category in ['inflow', 'outflow', 'balance', 'receivable', 'payable', 'invoice', 'voice_confirmed', 'security_2fa', 'ai_investor', 'pdf_export']
         && data.amountEGP is number && data.amountEGP >= 0 && data.amountEGP <= 1000000000
         && isValidString(data.details, 0, 400)
         && data.createdAt is timestamp;
     }
 
     // =========================================================================
-    // COLLECTION MATCH BLOCKS (100% Coverage of blueprint paths)
+    // COLLECTION MATCH BLOCKS
     // =========================================================================
 
     match /admins/{adminUid} {
@@ -754,7 +978,7 @@ service cloud.firestore {
         && (
           isAdmin() || (
             isOwner(userId)
-            && incoming().role in ['visitor', 'customer']
+            && incoming().role in ['visitor', 'customer', 'client', 'employee']
             && incoming().status in ['active', 'pending']
           )
         );
@@ -848,7 +1072,11 @@ service cloud.firestore {
             && incoming().status == existing().status
             && incoming().planId == existing().planId
             && incoming().customCommissionPct == existing().customCommissionPct
-            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'city', 'deliveryEnabled', 'logoUrl', 'cateringScheduleText', 'updatedAt'])
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'name', 'nameEn', 'city', 'deliveryEnabled', 'logoUrl',
+              'primaryColor', 'accentColor', 'specialtiesAr', 'specialtiesEn',
+              'capacityMealsPerDay', 'serviceAreasCsv', 'cateringScheduleText', 'updatedAt'
+            ])
           )
         );
 
@@ -982,6 +1210,248 @@ service cloud.firestore {
         );
 
       allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    match /marketplace_rfqs/{rfqId} {
+      allow get: if isValidId(rfqId) && isSignedIn() && (
+        existing().requesterUid == request.auth.uid ||
+        existing().targetMerchantOwnerUid == request.auth.uid ||
+        isActiveTenantMember(existing().targetTenantId) ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          existing().requesterUid == request.auth.uid ||
+          existing().targetMerchantOwnerUid == request.auth.uid
+        )
+      );
+
+      allow create: if isValidId(rfqId)
+        && isSignedIn()
+        && isValidMarketplaceRfq(incoming())
+        && incoming().rfqId == rfqId
+        && incoming().requesterUid == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().quotedPriceEGP == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(rfqId)
+        && isSignedIn()
+        && isValidMarketplaceRfq(incoming())
+        && incoming().rfqId == existing().rfqId
+        && incoming().requesterUid == existing().requesterUid
+        && incoming().targetTenantId == existing().targetTenantId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            (existing().targetMerchantOwnerUid == request.auth.uid || isActiveTenantMember(existing().targetTenantId))
+            && incoming().diff(existing()).affectedKeys().hasOnly(['quotedPriceEGP', 'merchantNote', 'status', 'updatedAt'])
+            && incoming().status in ['quoted', 'declined']
+          ) || (
+            existing().requesterUid == request.auth.uid
+            && existing().status == 'quoted'
+            && incoming().status in ['accepted', 'declined']
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(rfqId) && isAdmin();
+    }
+
+    match /marketplace_reviews/{reviewId} {
+      allow get, list: if true;
+      allow create: if isValidId(reviewId)
+        && isSignedIn()
+        && isValidMarketplaceReview(incoming())
+        && incoming().reviewId == reviewId
+        && incoming().authorUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(reviewId)
+        && isSignedIn()
+        && isValidMarketplaceReview(incoming())
+        && incoming().reviewId == existing().reviewId
+        && incoming().tenantId == existing().tenantId
+        && incoming().authorUid == existing().authorUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isAdmin() || existing().authorUid == request.auth.uid);
+      allow delete: if isValidId(reviewId) && isSignedIn() && (existing().authorUid == request.auth.uid || isAdmin());
+    }
+
+    match /basit_cards/{cardId} {
+      allow get: if isValidId(cardId) && isSignedIn() && (
+        existing().ownerUid == request.auth.uid ||
+        isActiveTenantMember(existing().tenantId) ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          existing().ownerUid == request.auth.uid ||
+          isActiveTenantMember(existing().tenantId)
+        )
+      );
+
+      allow create: if isValidId(cardId)
+        && isSignedIn()
+        && isValidBasitCard(incoming())
+        && incoming().cardId == cardId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          isActiveTenantMember(incoming().tenantId) || (
+            incoming().ownerUid == request.auth.uid
+            && incoming().monthlyQuotaEGP <= 3000
+            && incoming().usedAmountEGP == 0
+            && incoming().status == 'active'
+          )
+        );
+
+      allow update: if isValidId(cardId)
+        && isSignedIn()
+        && isValidBasitCard(incoming())
+        && incoming().cardId == existing().cardId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().tenantId == existing().tenantId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          isActiveTenantMember(existing().tenantId) || (
+            existing().ownerUid == request.auth.uid
+            && existing().status == 'active'
+            && incoming().monthlyQuotaEGP == existing().monthlyQuotaEGP
+            && incoming().usedAmountEGP >= existing().usedAmountEGP
+            && incoming().usedAmountEGP <= existing().monthlyQuotaEGP
+            && incoming().diff(existing()).affectedKeys().hasOnly(['usedAmountEGP', 'updatedAt'])
+          )
+        );
+
+      allow delete: if isValidId(cardId) && isAdmin();
+    }
+
+    match /basit_card_redemptions/{redemptionId} {
+      allow get: if isValidId(redemptionId) && isSignedIn() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().ownerUid == request.auth.uid);
+      allow create: if isValidId(redemptionId)
+        && isSignedIn()
+        && isValidBasitCardRedemption(incoming())
+        && incoming().redemptionId == redemptionId
+        && incoming().ownerUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if isValidId(redemptionId) && isAdmin();
+    }
+
+    match /healthy_plans/{planId} {
+      allow get: if isValidId(planId) && (existing().isActive == true || isAdmin());
+      allow list: if existing().isActive == true || isBootstrappedAdmin();
+      allow create, update: if isValidId(planId)
+        && isAdmin()
+        && isValidHealthyPlan(incoming())
+        && incoming().planId == planId
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(planId) && isAdmin();
+    }
+
+    match /healthy_subscriptions/{subId} {
+      allow get: if isValidId(subId) && isSignedIn() && (existing().subscriberUid == request.auth.uid || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isSignedIn() && existing().subscriberUid == request.auth.uid);
+      allow create: if isValidId(subId)
+        && isSignedIn()
+        && isValidHealthySubscription(incoming())
+        && incoming().subId == subId
+        && incoming().subscriberUid == request.auth.uid
+        && incoming().status == 'active'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(subId)
+        && isSignedIn()
+        && isValidHealthySubscription(incoming())
+        && incoming().subId == existing().subId
+        && incoming().subscriberUid == existing().subscriberUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() || (
+            existing().subscriberUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'deliveryAddress', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(subId) && isAdmin();
+    }
+
+    match /factory_employees/{empId} {
+      allow get: if isValidId(empId) && isSignedIn() && (
+        isAdmin() ||
+        isActiveTenantMember(existing().tenantId) ||
+        (
+          exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == existing().tenantId
+        )
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          isAdmin() ||
+          isActiveTenantMember(existing().tenantId) ||
+          (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.status == 'active' &&
+            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.tenantId == existing().tenantId
+          )
+        )
+      );
+      allow create: if isValidId(empId)
+        && isSignedIn()
+        && isValidFactoryEmployee(incoming())
+        && incoming().empId == empId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || isActiveTenantMember(incoming().tenantId));
+      allow update: if isValidId(empId)
+        && isSignedIn()
+        && isValidFactoryEmployee(incoming())
+        && incoming().empId == existing().empId
+        && incoming().tenantId == existing().tenantId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isAdmin() || isActiveTenantMember(existing().tenantId));
+      allow delete: if isValidId(empId) && isSignedIn() && (isAdmin() || isActiveTenantMember(existing().tenantId));
+    }
+
+    match /factory_complaints/{complaintId} {
+      allow get: if isValidId(complaintId) && isSignedIn() && (
+        existing().authorUid == request.auth.uid ||
+        isActiveTenantMember(existing().tenantId) ||
+        isAdmin()
+      );
+      allow list: if isBootstrappedAdmin() || (
+        isSignedIn() && (
+          existing().authorUid == request.auth.uid ||
+          isActiveTenantMember(existing().tenantId)
+        )
+      );
+      allow create: if isValidId(complaintId)
+        && isSignedIn()
+        && isValidFactoryComplaint(incoming())
+        && incoming().complaintId == complaintId
+        && incoming().authorUid == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(complaintId)
+        && isSignedIn()
+        && isValidFactoryComplaint(incoming())
+        && incoming().complaintId == existing().complaintId
+        && incoming().authorUid == existing().authorUid
+        && incoming().tenantId == existing().tenantId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isAdmin() || isActiveTenantMember(existing().tenantId));
+      allow delete: if isValidId(complaintId) && isAdmin();
     }
 
     match /couriers/{courierUid} {
@@ -1287,8 +1757,8 @@ service cloud.firestore {
           incoming().recipientUid == request.auth.uid ||
           (
             incoming().recipientUid == 'owner_central_admin'
-            && incoming().recipientRole == 'central_super_admin'
-            && incoming().category in ['order', 'offer', 'onboarding', 'system']
+            && incoming().recipientRole in ['central_super_admin', 'platform_owner', 'system_admin']
+            && incoming().category in ['order', 'offer', 'onboarding', 'complaint', 'system']
           )
         );
       allow update: if isValidId(notifId)
@@ -1596,70 +2066,87 @@ service cloud.firestore {
       allow delete: if isValidId(orderId) && isAdmin();
     }
 
-    // Strict App-Owner-Only Financial Dashboard Collections (ONLY hamzaelhelaly08@gmail.com)
+    // Strict Platform-Owner-Only Financial Hub
     match /owner_financial_accounts/{accountId} {
-      allow get, list: if isBootstrappedAdmin();
+      allow get, list: if isPlatformOwner();
       allow create, update: if isValidId(accountId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerFinancialAccount(incoming())
         && incoming().accountId == accountId
         && incoming().updatedAt == request.time;
-      allow delete: if isValidId(accountId) && isBootstrappedAdmin();
+      allow delete: if isValidId(accountId) && isPlatformOwner();
     }
 
     match /owner_financial_entries/{entryId} {
-      allow get, list: if isBootstrappedAdmin();
+      allow get, list: if isPlatformOwner();
       allow create: if isValidId(entryId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerFinancialEntry(incoming())
         && incoming().entryId == entryId
         && incoming().createdAt == request.time;
       allow update: if isValidId(entryId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerFinancialEntry(incoming())
         && incoming().entryId == existing().entryId
         && incoming().createdAt == existing().createdAt;
-      allow delete: if isValidId(entryId) && isBootstrappedAdmin();
+      allow delete: if isValidId(entryId) && isPlatformOwner();
+    }
+
+    match /owner_invoices/{invoiceId} {
+      allow get, list: if isPlatformOwner();
+      allow create: if isValidId(invoiceId)
+        && isPlatformOwner()
+        && isValidOwnerInvoice(incoming())
+        && incoming().invoiceId == invoiceId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(invoiceId)
+        && isPlatformOwner()
+        && isValidOwnerInvoice(incoming())
+        && incoming().invoiceId == existing().invoiceId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(invoiceId) && isPlatformOwner();
     }
 
     match /owner_client_receivables/{receivableId} {
-      allow get, list: if isBootstrappedAdmin();
+      allow get, list: if isPlatformOwner();
       allow create: if isValidId(receivableId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerClientReceivable(incoming())
         && incoming().receivableId == receivableId
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(receivableId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerClientReceivable(incoming())
         && incoming().receivableId == existing().receivableId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time;
-      allow delete: if isValidId(receivableId) && isBootstrappedAdmin();
+      allow delete: if isValidId(receivableId) && isPlatformOwner();
     }
 
     match /owner_supplier_payables/{payableId} {
-      allow get, list: if isBootstrappedAdmin();
+      allow get, list: if isPlatformOwner();
       allow create: if isValidId(payableId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerSupplierPayable(incoming())
         && incoming().payableId == payableId
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isValidId(payableId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerSupplierPayable(incoming())
         && incoming().payableId == existing().payableId
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time;
-      allow delete: if isValidId(payableId) && isBootstrappedAdmin();
+      allow delete: if isValidId(payableId) && isPlatformOwner();
     }
 
     match /owner_financial_audit_logs/{logId} {
-      allow get, list: if isBootstrappedAdmin();
+      allow get, list: if isPlatformOwner();
       allow create: if isValidId(logId)
-        && isBootstrappedAdmin()
+        && isPlatformOwner()
         && isValidOwnerFinancialAuditLog(incoming())
         && incoming().logId == logId
         && incoming().createdAt == request.time;

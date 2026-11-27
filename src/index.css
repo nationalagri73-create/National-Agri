@@ -9,21 +9,58 @@
   --font-sans: "Cairo", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Cairo", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-latin: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+
+  --color-basit-burgundy: #3B123F;
+  --color-basit-burgundy-soft: #501C5A;
+  --color-basit-pearl: #FFFFFF;
+  --color-basit-pearl-soft: #FFFEFC;
+  --color-basit-gold: #D4AF37;
+  --color-basit-gold-light: #F2D36B;
+  --color-basit-hairline: #ECE4E8;
+  --color-basit-ink: #1F0B22;
+  --color-basit-muted: #68516B;
 }
 
 @layer base {
-  html {
+  html,
+  body {
     font-family: var(--font-sans);
+    background-color: #FFFEFC;
+    color: #1F0B22;
+    overflow-x: hidden;
     scroll-behavior: smooth;
+    overscroll-behavior-y: contain;
+    touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
+  }
+
+  button,
+  a,
+  select,
+  input,
+  textarea {
+    touch-action: manipulation;
   }
 
   .tabular-nums {
     font-variant-numeric: tabular-nums;
   }
 
+  .pt-safe {
+    padding-top: max(0.5rem, env(safe-area-inset-top));
+  }
+
   .pb-safe {
-    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+    padding-bottom: max(0.45rem, env(safe-area-inset-bottom));
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
   }
 }
 

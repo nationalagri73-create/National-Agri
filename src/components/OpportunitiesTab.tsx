@@ -189,7 +189,7 @@ export const OpportunitiesTab: React.FC<OpportunitiesTabProps> = ({
             setOppMsg(null);
             setShowCreateOpp((v) => !v);
           }}
-          className="min-h-[44px] px-4 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#4F2487] text-white text-xs font-semibold hover:bg-[#3f1c6d] transition-colors cursor-pointer whitespace-nowrap shrink-0"
+          className="min-h-[44px] px-4 inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#3B123F] text-white text-xs font-semibold hover:bg-[#501C5A] transition-colors cursor-pointer whitespace-nowrap shrink-0"
         >
           <Plus className="w-4 h-4" />
           إضافة فرصة استثمارية / موقع
@@ -326,7 +326,7 @@ export const OpportunitiesTab: React.FC<OpportunitiesTabProps> = ({
             <button
               type="submit"
               disabled={submittingOpp}
-              className="min-h-[44px] px-5 rounded-xl bg-[#4F2487] text-white text-xs font-semibold hover:bg-[#3f1c6d] disabled:opacity-50 cursor-pointer"
+              className="min-h-[44px] px-5 rounded-xl bg-[#3B123F] text-white text-xs font-semibold hover:bg-[#501C5A] disabled:opacity-50 cursor-pointer"
             >
               {submittingOpp ? 'جاري التسجيل...' : 'حفظ الفرصة'}
             </button>
@@ -372,7 +372,7 @@ export const OpportunitiesTab: React.FC<OpportunitiesTabProps> = ({
                     setPropMsg(null);
                     setProposalTarget(opp);
                   }}
-                  className="min-h-[44px] px-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#4F2487] transition-colors cursor-pointer whitespace-nowrap"
+                  className="min-h-[44px] px-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-[#3B123F] transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <Briefcase className="w-4 h-4" />
                   تقديم مقترح انتفاع
@@ -419,7 +419,7 @@ export const OpportunitiesTab: React.FC<OpportunitiesTabProps> = ({
                             المبادر {prop.proposerProfitPct}% · مالك الموقع {prop.siteOwnerProfitPct}% · المنصة {prop.platformUsufructPct}%
                           </div>
                         </div>
-                        <span className="text-xs font-semibold text-[#4F2487]">
+                        <span className="text-xs font-semibold text-[#3B123F]">
                           {PROPOSAL_STATUS_AR[prop.status] || prop.status}
                         </span>
                       </div>
@@ -597,7 +597,7 @@ export const OpportunitiesTab: React.FC<OpportunitiesTabProps> = ({
             <button
               type="submit"
               disabled={submittingProp || !isSplitValid}
-              className="mt-5 w-full min-h-[48px] rounded-xl bg-[#4F2487] text-white text-sm font-semibold hover:bg-[#3f1c6d] disabled:opacity-50 cursor-pointer"
+              className="mt-5 w-full min-h-[48px] rounded-xl bg-[#3B123F] text-white text-sm font-semibold hover:bg-[#501C5A] disabled:opacity-50 cursor-pointer"
             >
               {submittingProp
                 ? 'جاري التقديم...'
